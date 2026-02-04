@@ -15,7 +15,7 @@ st.title("📅 SwiftRoster Pro – Airline Roster Generator")
 DAYS = list(range(1, 32))
 STATE_FILE = "roster_state.json"
 
-# ---------------- PERSISTENT STORAGE ----------------
+# ---------------- STORAGE ----------------
 def load_state():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, "r") as f:
@@ -35,7 +35,9 @@ for k, v in stored.items():
 st.session_state.setdefault("workers_per_day", 10)
 st.session_state.setdefault("required_work_days", 18)
 st.session_state.setdefault("max_supervisors", 3)
+
 st.session_state.setdefault("is_admin", False)
+st.session_state.setdefault("admin_viewer_mode", False)
 
 st.session_state.setdefault("workers", [
     "ONYEWUNYI", "NDIMELE", "BELLO", "FASEYE",
@@ -54,68 +56,92 @@ st.session_state.setdefault(
 )
 
 st.session_state.setdefault("leave_days", {})
+st.session_state.setdefault("off_days", {})
 st.session_state.setdefault("admin_pin", "1234")  # CHANGE IN PROD
 
 # ---------------- SIDEBAR : ADMIN LOGIN ----------------
-st.sidebar.header("🔐 Admin Access")
+st.sidebar.header("🔐 Admin Unlock")
 
-pin_input = st.sidebar.text_input("Enter Admin PIN", type="password")
+pin = st.sidebar.text_input("Enter Admin PIN", type="password")
 
-if pin_input:
-    if pin_input == st.session_state.admin_pin:
+if pin:
+    if pin == st.session_state.admin_pin:
         st.session_state.is_admin = True
-        st.sidebar.success("Admin access granted")
+        st.sidebar.success("Admin unlocked")
     else:
         st.session_state.is_admin = False
         st.sidebar.error("Invalid PIN")
 
-# ---------------- ADMIN SETTINGS ----------------
+# ---------------- MODE SWITCH ----------------
+if st.session_state.is_admin:
+    st.sidebar.divider()
+    st.sidebar.header("🔁 Mode")
+    st.session_state.admin_viewer_mode = st.sidebar.toggle(
+        "View as Viewer",
+        value=st.session_state.admin_viewer_mode
+    )
+
+# Effective permissions
+CAN_ADMIN = st.session_state.is_admin and not st.session_state.admin_viewer_mode
+CAN_ASSIGN_LEAVE = st.session_state.is_admin or not CAN_ADMIN
+
+# ---------------- SYSTEM SETTINGS ----------------
 st.sidebar.divider()
 st.sidebar.header("⚙️ System Settings")
 
-if st.session_state.is_admin:
+if CAN_ADMIN:
     st.session_state.workers_per_day = st.sidebar.number_input(
         "Workers Per Day", 1, 50, st.session_state.workers_per_day
     )
 else:
-    st.sidebar.info("Viewer mode")
+    st.sidebar.number_input(
+        "Workers Per Day",
+        value=st.session_state.workers_per_day,
+        disabled=True,
+        help="Unlock admin to edit"
+    )
 
-# ---------------- WORKER MANAGEMENT ----------------
+# ---------------- WORKERS ----------------
 st.sidebar.divider()
-st.sidebar.header("👷 Worker Management")
+st.sidebar.header("👷 Workers")
 
-if st.session_state.is_admin:
+if CAN_ADMIN:
     new_worker = st.sidebar.text_input("Add Worker")
     if st.sidebar.button("Add Worker"):
         if new_worker and new_worker.upper() not in st.session_state.workers:
             st.session_state.workers.append(new_worker.upper())
 else:
-    st.sidebar.caption("Admin only")
+    st.sidebar.text_input("Add Worker", disabled=True)
 
 # ---------------- SUPERVISORS ----------------
 st.sidebar.divider()
 st.sidebar.header("🧑‍✈️ Supervisors")
 
-if st.session_state.is_admin:
-    for i in range(st.session_state.max_supervisors):
-        sup = st.sidebar.text_input(
-            f"Supervisor {i+1}",
-            st.session_state.supervisors[i]
-        ).upper()
+for i in range(st.session_state.max_supervisors):
+    disabled = not CAN_ADMIN
 
-        old = st.session_state.supervisors[i]
+    sup = st.sidebar.text_input(
+        f"Supervisor {i+1}",
+        st.session_state.supervisors[i],
+        disabled=disabled
+    ).upper()
+
+    old = st.session_state.supervisors[i]
+    if CAN_ADMIN:
         st.session_state.supervisors[i] = sup
         st.session_state.supervisor_assignments[sup] = \
             st.session_state.supervisor_assignments.pop(old, [])
 
-        assigned = st.sidebar.multiselect(
-            f"{sup} → Assigned Workers",
-            st.session_state.workers,
-            st.session_state.supervisor_assignments[sup]
-        )
-        st.session_state.supervisor_assignments[sup] = assigned
-else:
-    st.sidebar.caption("Admin only")
+    st.sidebar.multiselect(
+        f"{sup} → Workers",
+        st.session_state.workers,
+        st.session_state.supervisor_assignments[sup],
+        disabled=disabled,
+        help="Unlock admin to edit"
+    )
+
+    if CAN_ADMIN:
+        st.session_state.supervisor_assignments[sup] = st.session_state.supervisor_assignments[sup]
 
 # ---------------- ACTIVE WORKERS ----------------
 active_workers = sorted({
@@ -125,29 +151,34 @@ active_workers = sorted({
 st.subheader("✅ Active Workers")
 st.write(", ".join(active_workers) if active_workers else "No workers assigned")
 
-# ---------------- SIDEBAR : LEAVE MANAGEMENT ----------------
+# ---------------- OFF & LEAVE ----------------
 st.sidebar.divider()
 st.sidebar.header("📅 Off & Leave Management")
 
-if st.session_state.is_admin:
-    st.sidebar.info("Leave assignment is Viewer-only")
-elif not active_workers:
+if not active_workers:
     st.sidebar.warning("No active workers")
 else:
-    max_leave = 31 - st.session_state.required_work_days
-    st.sidebar.caption(f"Maximum leave per worker: {max_leave} days")
+    max_non_work = 31 - st.session_state.required_work_days
+    st.sidebar.caption(f"Off + Leave ≤ {max_non_work} days")
 
     for w in active_workers:
         leave = st.sidebar.multiselect(
-            f"{w} – Leave Days",
+            f"{w} – Leave (L)",
             DAYS,
             st.session_state.leave_days.get(w, [])
         )
 
-        if len(leave) > max_leave:
-            st.sidebar.error("Too many leave days")
+        off = st.sidebar.multiselect(
+            f"{w} – Off (O)",
+            [d for d in DAYS if d not in leave],
+            st.session_state.off_days.get(w, [])
+        )
+
+        if len(set(leave) | set(off)) > max_non_work:
+            st.sidebar.error("Too many non-working days")
         else:
             st.session_state.leave_days[w] = leave
+            st.session_state.off_days[w] = off
 
 # ---------------- GENERATE ROSTER ----------------
 if st.button("🚀 Generate Roster"):
@@ -155,10 +186,11 @@ if st.button("🚀 Generate Roster"):
     roster = pd.DataFrame("O", index=active_workers, columns=DAYS)
     duty = {w: 0 for w in active_workers}
 
-    for w, leave in st.session_state.leave_days.items():
-        for d in leave:
-            if w in roster.index:
-                roster.loc[w, d] = "L"
+    for w in active_workers:
+        for d in st.session_state.leave_days.get(w, []):
+            roster.loc[w, d] = "L"
+        for d in st.session_state.off_days.get(w, []):
+            roster.loc[w, d] = "O"
 
     for d in DAYS:
         available = [
@@ -182,8 +214,9 @@ if st.button("🚀 Generate Roster"):
 
     with col2:
         st.subheader("📊 Duty Count")
-        chart_df = pd.DataFrame.from_dict(duty, orient="index", columns=["Days Worked"])
-        st.bar_chart(chart_df)
+        st.bar_chart(
+            pd.DataFrame.from_dict(duty, orient="index", columns=["Days Worked"])
+        )
 
     st.download_button(
         "📥 Download CSV",
@@ -202,8 +235,4 @@ if st.button("🚀 Generate Roster"):
         doc.build([table])
         return tmp.name
 
-    with open(export_pdf(roster), "rb") as f:
-        st.download_button("📄 Download PDF", f, "roster.pdf")
-
-# ---------------- SAVE STATE ----------------
-save_state()
+    with open(export_pdf(roster), "rb") as
