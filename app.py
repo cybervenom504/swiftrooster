@@ -5,6 +5,7 @@ from datetime import datetime
 from reportlab.lib.pagesizes import landscape, A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
 from reportlab.lib import colors
+import tempfile
 
 # ---------------- PAGE CONFIG ----------------
 st.set_page_config(
@@ -31,7 +32,7 @@ st.sidebar.header("1️⃣ Worker Management")
 
 new_worker = st.sidebar.text_input("Add Worker")
 if st.sidebar.button("➕ Add Worker"):
-    if new_worker and new_worker not in st.session_state.workers:
+    if new_worker and new_worker.upper() not in st.session_state.workers:
         st.session_state.workers.append(new_worker.upper())
 
 st.sidebar.subheader("Edit / Remove Workers")
@@ -72,12 +73,11 @@ if leave_input:
     for line in leave_input.split("\n"):
         if ":" in line:
             name, days = line.split(":")
-            day_list = [
+            leave_requests[name.strip().upper()] = [
                 int(d.strip())
                 for d in days.split(",")
                 if d.strip().isdigit() and 1 <= int(d.strip()) <= num_days
             ]
-            leave_requests[name.strip().upper()] = day_list
 
 # ---------------- GENERATE ROSTER ----------------
 if st.button("🚀 Generate Roster"):
@@ -87,31 +87,29 @@ if st.button("🚀 Generate Roster"):
         st.stop()
 
     days = list(range(1, num_days + 1))
-    day_names = [
+    day_letters = [
         pd.to_datetime(f"{year}-{month:02d}-{d:02d}").strftime("%a")[0]
         for d in days
     ]
 
-    # Create empty matrix
-    roster_matrix = {
-        "NAME": st.session_state.workers
-    }
-
+    # -------- CREATE MATRIX --------
+    roster_matrix = {"NAME": st.session_state.workers}
     for d in days:
         roster_matrix[d] = ["X"] * len(st.session_state.workers)
 
     df_matrix = pd.DataFrame(roster_matrix).set_index("NAME")
 
+    # -------- SHIFT BALANCE --------
     worker_shift_counts = {w: 0 for w in st.session_state.workers}
 
     for d in days:
-        available_workers = [
+        available = [
             w for w in st.session_state.workers
             if d not in leave_requests.get(w, [])
         ]
 
-        available_workers.sort(key=lambda x: worker_shift_counts[x])
-        selected = available_workers[:WORKERS_PER_DAY]
+        available.sort(key=lambda x: worker_shift_counts[x])
+        selected = available[:WORKERS_PER_DAY]
 
         for w in selected:
             df_matrix.loc[w, d] = "M"
@@ -121,11 +119,11 @@ if st.button("🚀 Generate Roster"):
             if d in leave_days and w in df_matrix.index:
                 df_matrix.loc[w, d] = "L"
 
-    # ---------------- ADD HEADER ROWS ----------------
+    # -------- HEADER ROWS --------
     header_rows = pd.DataFrame(
         [
             ["DATE"] + days,
-            ["DAY"] + day_names,
+            ["DAY"] + day_letters,
         ],
         columns=["NAME"] + days
     )
@@ -135,8 +133,23 @@ if st.button("🚀 Generate Roster"):
         ignore_index=True
     )
 
-    st.subheader("📋 Roster Preview")
-    st.dataframe(export_df, use_container_width=True)
+    # ---------------- DISPLAY ----------------
+    col1, col2 = st.columns([3, 1])
+
+    with col1:
+        st.subheader("📋 Roster Preview")
+        st.dataframe(export_df, use_container_width=True)
+
+    with col2:
+        st.subheader("📊 Worker Workload Balance")
+
+        workload_df = (
+            pd.DataFrame(worker_shift_counts.items(), columns=["Worker", "Shifts"])
+            .set_index("Worker")
+            .sort_values("Shifts", ascending=False)
+        )
+
+        st.bar_chart(workload_df)
 
     # ---------------- CSV EXPORT ----------------
     st.download_button(
@@ -148,7 +161,9 @@ if st.button("🚀 Generate Roster"):
 
     # ---------------- PDF EXPORT ----------------
     def export_pdf(df):
-        pdf_path = "/mnt/data/airline_roster.pdf"
+        temp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+        pdf_path = temp.name
+        temp.close()
 
         doc = SimpleDocTemplate(
             pdf_path,
@@ -168,8 +183,8 @@ if st.button("🚀 Generate Roster"):
             ("ALIGN", (1,0), (-1,-1), "CENTER"),
             ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
             ("FONTSIZE", (0,0), (-1,-1), 7),
-            ("BOTTOMPADDING", (0,0), (-1,-1), 4),
             ("TOPPADDING", (0,0), (-1,-1), 4),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 4),
         ]))
 
         doc.build([table])
