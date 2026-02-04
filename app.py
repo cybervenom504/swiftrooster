@@ -3,7 +3,6 @@ import pandas as pd
 import json
 import os
 import tempfile
-from datetime import datetime
 from reportlab.lib.pagesizes import landscape, A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
 from reportlab.lib import colors
@@ -36,6 +35,7 @@ for k, v in stored.items():
 st.session_state.setdefault("workers_per_day", 10)
 st.session_state.setdefault("required_work_days", 18)
 st.session_state.setdefault("max_supervisors", 3)
+st.session_state.setdefault("is_admin", False)
 
 st.session_state.setdefault("workers", [
     "ONYEWUNYI", "NDIMELE", "BELLO", "FASEYE",
@@ -53,77 +53,69 @@ st.session_state.setdefault(
     {sup: [] for sup in st.session_state.supervisors}
 )
 
-st.session_state.setdefault("leave_days", {})  # {worker: [days]}
-st.session_state.setdefault("admin_pin", "1234")
-st.session_state.setdefault("current_role", "Viewer")
+st.session_state.setdefault("leave_days", {})
+st.session_state.setdefault("admin_pin", "1234")  # CHANGE IN PROD
 
-# ---------------- ROLE HELPERS ----------------
-def is_admin():
-    return st.session_state.current_role == "Admin"
+# ---------------- SIDEBAR : ADMIN LOGIN ----------------
+st.sidebar.header("🔐 Admin Access")
 
-def is_viewer():
-    return st.session_state.current_role == "Viewer"
+pin_input = st.sidebar.text_input("Enter Admin PIN", type="password")
 
-# ---------------- SIDEBAR : ACCESS ----------------
-st.sidebar.header("👤 Access Control")
-
-role = st.sidebar.selectbox("Role", ["Viewer", "Admin"])
-
-if role == "Admin":
-    pin = st.sidebar.text_input("Admin PIN", type="password")
-    if pin == st.session_state.admin_pin:
-        st.session_state.current_role = "Admin"
+if pin_input:
+    if pin_input == st.session_state.admin_pin:
+        st.session_state.is_admin = True
         st.sidebar.success("Admin access granted")
     else:
-        st.session_state.current_role = "Viewer"
-        if pin:
-            st.sidebar.error("Invalid PIN")
-else:
-    st.session_state.current_role = "Viewer"
+        st.session_state.is_admin = False
+        st.sidebar.error("Invalid PIN")
 
 # ---------------- ADMIN SETTINGS ----------------
 st.sidebar.divider()
 st.sidebar.header("⚙️ System Settings")
 
-if is_admin():
+if st.session_state.is_admin:
     st.session_state.workers_per_day = st.sidebar.number_input(
         "Workers Per Day", 1, 50, st.session_state.workers_per_day
     )
 else:
-    st.sidebar.info("🔒 Admin only")
+    st.sidebar.info("Viewer mode")
 
-# ---------------- WORKERS ----------------
+# ---------------- WORKER MANAGEMENT ----------------
 st.sidebar.divider()
 st.sidebar.header("👷 Worker Management")
 
-new_worker = st.sidebar.text_input("Add Worker")
-
-if is_admin() and st.sidebar.button("Add Worker"):
-    if new_worker and new_worker.upper() not in st.session_state.workers:
-        st.session_state.workers.append(new_worker.upper())
+if st.session_state.is_admin:
+    new_worker = st.sidebar.text_input("Add Worker")
+    if st.sidebar.button("Add Worker"):
+        if new_worker and new_worker.upper() not in st.session_state.workers:
+            st.session_state.workers.append(new_worker.upper())
+else:
+    st.sidebar.caption("Admin only")
 
 # ---------------- SUPERVISORS ----------------
 st.sidebar.divider()
 st.sidebar.header("🧑‍✈️ Supervisors")
 
-for i in range(st.session_state.max_supervisors):
-    sup = st.sidebar.text_input(
-        f"Supervisor {i+1}",
-        st.session_state.supervisors[i]
-    ).upper()
+if st.session_state.is_admin:
+    for i in range(st.session_state.max_supervisors):
+        sup = st.sidebar.text_input(
+            f"Supervisor {i+1}",
+            st.session_state.supervisors[i]
+        ).upper()
 
-    old = st.session_state.supervisors[i]
-    st.session_state.supervisors[i] = sup
-    st.session_state.supervisor_assignments[sup] = \
-        st.session_state.supervisor_assignments.pop(old, [])
+        old = st.session_state.supervisors[i]
+        st.session_state.supervisors[i] = sup
+        st.session_state.supervisor_assignments[sup] = \
+            st.session_state.supervisor_assignments.pop(old, [])
 
-    assigned = st.sidebar.multiselect(
-        f"{sup} → Assigned Workers",
-        st.session_state.workers,
-        st.session_state.supervisor_assignments[sup]
-    )
-
-    st.session_state.supervisor_assignments[sup] = assigned
+        assigned = st.sidebar.multiselect(
+            f"{sup} → Assigned Workers",
+            st.session_state.workers,
+            st.session_state.supervisor_assignments[sup]
+        )
+        st.session_state.supervisor_assignments[sup] = assigned
+else:
+    st.sidebar.caption("Admin only")
 
 # ---------------- ACTIVE WORKERS ----------------
 active_workers = sorted({
@@ -137,26 +129,25 @@ st.write(", ".join(active_workers) if active_workers else "No workers assigned")
 st.sidebar.divider()
 st.sidebar.header("📅 Off & Leave Management")
 
-if not is_viewer():
-    st.sidebar.info("🔒 Only Viewers can assign leave")
+if st.session_state.is_admin:
+    st.sidebar.info("Leave assignment is Viewer-only")
 elif not active_workers:
     st.sidebar.warning("No active workers")
 else:
-    st.sidebar.caption("Each worker must work exactly 18 days")
     max_leave = 31 - st.session_state.required_work_days
+    st.sidebar.caption(f"Maximum leave per worker: {max_leave} days")
 
     for w in active_workers:
-        selected = st.sidebar.multiselect(
+        leave = st.sidebar.multiselect(
             f"{w} – Leave Days",
             DAYS,
-            st.session_state.leave_days.get(w, []),
-            help=f"Maximum leave: {max_leave} days"
+            st.session_state.leave_days.get(w, [])
         )
 
-        if len(selected) > max_leave:
+        if len(leave) > max_leave:
             st.sidebar.error("Too many leave days")
         else:
-            st.session_state.leave_days[w] = selected
+            st.session_state.leave_days[w] = leave
 
 # ---------------- GENERATE ROSTER ----------------
 if st.button("🚀 Generate Roster"):
