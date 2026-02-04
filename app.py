@@ -81,12 +81,11 @@ if st.session_state.is_admin:
         sup = st.sidebar.text_input(f"Supervisor {i+1}", old).upper()
         st.session_state.supervisors[i] = sup
         st.session_state.supervisor_assignments[sup] = st.session_state.supervisor_assignments.pop(old, [])
-        assigned = st.sidebar.multiselect(
+        st.session_state.supervisor_assignments[sup] = st.sidebar.multiselect(
             f"{sup} → Workers",
             st.session_state.workers,
             st.session_state.supervisor_assignments[sup]
         )
-        st.session_state.supervisor_assignments[sup] = assigned
 
     st.sidebar.divider()
     st.sidebar.header("🏖 Admin Controlled Leave")
@@ -100,8 +99,6 @@ if st.session_state.is_admin:
         )
         if len(leave) <= max_leave:
             st.session_state.leave_days[w] = leave
-        else:
-            st.sidebar.error(f"{w} exceeds max leave days")
 
 # ---------------- ACTIVE WORKERS ----------------
 active_workers = sorted({w for ws in st.session_state.supervisor_assignments.values() for w in ws})
@@ -122,8 +119,6 @@ if not st.session_state.is_admin and active_workers:
         )
         if len(off) <= max_off:
             st.session_state.off_days[w] = off
-        else:
-            st.sidebar.error(f"{w} exceeds max off days")
 
 # ---------------- GENERATE ROSTER ----------------
 if st.button("🚀 Generate Roster"):
@@ -131,15 +126,15 @@ if st.button("🚀 Generate Roster"):
     roster = pd.DataFrame("O", index=active_workers, columns=DAYS)
     duty = {w: 0 for w in active_workers}
 
-    for w, offs in st.session_state.off_days.items():
-        for d in offs:
-            if w in roster.index:
-                roster.loc[w, d] = "O"
-
     for w, leaves in st.session_state.leave_days.items():
         for d in leaves:
             if w in roster.index:
                 roster.loc[w, d] = "L"
+
+    for w, offs in st.session_state.off_days.items():
+        for d in offs:
+            if w in roster.index:
+                roster.loc[w, d] = "O"
 
     for d in DAYS:
         available = [w for w in active_workers if roster.loc[w, d] == "O" and duty[w] < st.session_state.required_work_days]
@@ -148,26 +143,24 @@ if st.button("🚀 Generate Roster"):
             roster.loc[w, d] = "M"
             duty[w] += 1
 
-    # Day header
+    # ---------------- HTML TABLE (NO STYLER) ----------------
     year, month = datetime.now().year, datetime.now().month
-    day_letters = [datetime(year, month, d).strftime("%a")[0] for d in DAYS]
+    days = [datetime(year, month, d).strftime("%a")[0] for d in DAYS]
 
-    display_roster = roster.copy()
-    display_roster.columns = pd.MultiIndex.from_arrays([[""] * len(DAYS), day_letters])
-    display_roster.index.name = "Worker"
+    def cell(val):
+        colors = {"M": "#90ee90", "O": "#d3d3d3", "L": "#ff7f7f"}
+        return f"<td style='background:{colors.get(val,'white')};text-align:center'>{val}</td>"
 
-    # ---------------- SAFE COLOR DISPLAY ----------------
-    def color_map(val):
-        if val == "M": return "background-color:#90ee90"
-        if val == "O": return "background-color:#d3d3d3"
-        if val == "L": return "background-color:#ff7f7f"
-        return ""
+    html = "<table style='border-collapse:collapse;width:100%'>"
+    html += "<tr><th>Worker</th>" + "".join(f"<th>{d}</th>" for d in days) + "</tr>"
+
+    for w in roster.index:
+        html += f"<tr><td><b>{w}</b></td>" + "".join(cell(roster.loc[w, d]) for d in DAYS) + "</tr>"
+
+    html += "</table>"
 
     st.subheader("📋 31-Day Duty Roster")
-    st.markdown(
-        display_roster.style.applymap(color_map).to_html(),
-        unsafe_allow_html=True
-    )
+    st.markdown(html, unsafe_allow_html=True)
 
     st.subheader("📊 Duty Days")
     st.bar_chart(pd.DataFrame.from_dict(duty, orient="index", columns=["Days Worked"]))
@@ -189,5 +182,5 @@ if st.button("🚀 Generate Roster"):
     with open(export_pdf(roster), "rb") as f:
         st.download_button("📄 Download PDF", f, "roster.pdf")
 
-# ---------------- SAVE STATE ----------------
+# ---------------- SAVE ----------------
 save_state()
