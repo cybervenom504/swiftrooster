@@ -5,6 +5,7 @@ from datetime import datetime
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
+from io import BytesIO
 
 # ---------------- CONFIG ----------------
 st.set_page_config(page_title="SwiftRoster Pro", layout="wide")
@@ -40,8 +41,8 @@ if leave_input:
                 int(d.strip()) for d in days.split(",") if d.strip().isdigit()
             ]
 
-# ---------------- GENERATE ----------------
-if st.button("🚀 Generate & Download Excel"):
+# ---------------- GENERATE ROSTER ----------------
+if st.button("🚀 Generate Roster Excel"):
     num_days = monthrange(year, month)[1]
 
     worker_counts = {w: 0 for w in st.session_state.workers}
@@ -69,7 +70,7 @@ if st.button("🚀 Generate & Download Excel"):
 
         roster[day] = assigned
 
-    # ---------------- EXCEL BUILD ----------------
+    # ---------------- BUILD EXCEL ----------------
     wb = Workbook()
     ws = wb.active
     ws.title = "ROSTER"
@@ -80,7 +81,6 @@ if st.button("🚀 Generate & Download Excel"):
         top=Side(style="thick"),
         bottom=Side(style="thick")
     )
-
     center = Alignment(horizontal="center", vertical="center")
     bold = Font(bold=True)
 
@@ -155,13 +155,25 @@ if st.button("🚀 Generate & Download Excel"):
     ws["A" + str(row)].alignment = center
     ws["A" + str(row)].font = bold
 
-    file_name = f"ROYAL_AIR_MAROC_ROSTER_{month}_{year}.xlsx"
-    wb.save(file_name)
+    # Save Excel in memory
+    excel_buffer = BytesIO()
+    wb.save(excel_buffer)
+    excel_buffer.seek(0)
 
-    with open(file_name, "rb") as f:
-        st.download_button(
-            "📥 Download Official Roster (Excel)",
-            f,
-            file_name=file_name,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+    # Store in session state for download
+    st.session_state["excel_file"] = excel_buffer
+    st.session_state["excel_file_name"] = f"ROYAL_AIR_MAROC_ROSTER_{month}_{year}.xlsx"
+
+    st.success(f"✅ Roster Excel for {month}/{year} generated!")
+
+# ---------------- DOWNLOAD SECTION ----------------
+st.subheader("Download Excel")
+if "excel_file" in st.session_state:
+    st.download_button(
+        "📥 Download Official Roster (Excel)",
+        data=st.session_state["excel_file"],
+        file_name=st.session_state["excel_file_name"],
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+else:
+    st.info("Generate the roster first to download the Excel file.")
