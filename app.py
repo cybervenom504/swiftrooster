@@ -1,184 +1,171 @@
 import streamlit as st
+import pandas as pd
 from calendar import monthrange
 from datetime import datetime
-from openpyxl import Workbook
-from openpyxl.styles import Font, Alignment, Border, Side
-from openpyxl.utils import get_column_letter
-from io import BytesIO
-import pandas as pd
 
-# ---------------- CONFIG ----------------
-st.set_page_config(page_title="SwiftRoster Pro", layout="wide")
-st.title("📅 SwiftRoster Pro – Official Duty Roster")
+# ---------------- PAGE CONFIG ----------------
+st.set_page_config(
+    page_title="SwiftRoster Pro",
+    layout="wide"
+)
 
+st.title("📅 SwiftRoster Pro – Workers & Supervisor Roster")
+
+# ---------------- CONSTANT RULES ----------------
 WORKERS_PER_DAY = 8
-SUPERVISORS = ["SUPERVISOR A", "SUPERVISOR B", "SUPERVISOR C"]
+SUPERVISORS_PER_DAY = 1
+TOTAL_SUPERVISORS = 3
 
-# ---------------- SESSION ----------------
+# ---------------- SESSION STATE ----------------
 if "workers" not in st.session_state:
     st.session_state.workers = [
-        "ONYEWUENYI", "NDIMELE", "BELLO", "FASEYE",
-        "IWUNZE", "OZUA", "JAMES", "OLABANJI",
-        "NURUDEEN", "ENEH", "MUSA", "SANI",
-        "ADENIJI", "JOSEPH", "IDOWU"
+        "Alice", "Bob", "Charlie", "Diana",
+        "Edward", "Fiona", "George", "Hannah",
+        "Ian", "Julia"
+    ]
+
+if "supervisors" not in st.session_state:
+    st.session_state.supervisors = [
+        "Supervisor A", "Supervisor B", "Supervisor C"
     ]
 
 # ---------------- SIDEBAR ----------------
-st.sidebar.header("Month & Year")
-month = st.sidebar.selectbox("Month", range(1, 13), index=0)
-year = st.sidebar.number_input("Year", value=2026)
+st.sidebar.header("1️⃣ Worker Management")
 
-st.sidebar.header("Leave (one per line)")
-st.sidebar.info("Format: NAME: 5, 12, 18")
-leave_input = st.sidebar.text_area("Leave Input")
+new_worker = st.sidebar.text_input("Add Worker")
+if st.sidebar.button("➕ Add Worker"):
+    if new_worker and new_worker not in st.session_state.workers:
+        st.session_state.workers.append(new_worker)
+
+st.sidebar.subheader("Edit / Remove Workers")
+remove_workers = []
+for i, w in enumerate(st.session_state.workers):
+    c1, c2 = st.sidebar.columns([4, 1])
+    with c1:
+        st.session_state.workers[i] = st.text_input(
+            f"Worker {i+1}", w, key=f"worker_{i}"
+        )
+    with c2:
+        if st.button("❌", key=f"remove_worker_{i}"):
+            remove_workers.append(w)
+
+for w in remove_workers:
+    st.session_state.workers.remove(w)
+
+# ---------------- SUPERVISORS ----------------
+st.sidebar.header("2️⃣ Supervisor Management (3 Total)")
+for i in range(TOTAL_SUPERVISORS):
+    st.session_state.supervisors[i] = st.sidebar.text_input(
+        f"Supervisor {i+1}",
+        st.session_state.supervisors[i],
+        key=f"sup_{i}"
+    )
+
+# ---------------- DATE SETTINGS ----------------
+st.sidebar.header("3️⃣ Date Selection")
+month = st.sidebar.selectbox(
+    "Month", list(range(1, 13)), index=datetime.now().month - 1
+)
+year = st.sidebar.number_input(
+    "Year", min_value=2024, max_value=2030, value=2026
+)
+
+num_days = monthrange(year, month)[1]
+
+# ---------------- LEAVE MANAGEMENT ----------------
+st.sidebar.header("4️⃣ Leave / Blackout Dates")
+st.sidebar.info("Format (one per line):\nAlice: 5, 6, 7")
+
+leave_input = st.sidebar.text_area("Enter Leave Requests")
 
 leave_requests = {}
 if leave_input:
     for line in leave_input.split("\n"):
         if ":" in line:
             name, days = line.split(":")
-            leave_requests[name.strip()] = [
-                int(d.strip()) for d in days.split(",") if d.strip().isdigit()
+            day_list = [
+                int(d.strip())
+                for d in days.split(",")
+                if d.strip().isdigit() and 1 <= int(d.strip()) <= num_days
             ]
+            leave_requests[name.strip()] = day_list
 
 # ---------------- GENERATE ROSTER ----------------
 if st.button("🚀 Generate Roster"):
-    num_days = monthrange(year, month)[1]
+    if len(st.session_state.workers) < WORKERS_PER_DAY:
+        st.error("❌ Not enough workers to meet daily requirement.")
+        st.stop()
 
-    worker_counts = {w: 0 for w in st.session_state.workers}
-    supervisor_counts = {s: 0 for s in SUPERVISORS}
+    worker_shift_counts = {w: 0 for w in st.session_state.workers}
+    supervisor_shift_counts = {s: 0 for s in st.session_state.supervisors}
 
-    roster = {}
-    supervisors_by_day = {}
+    roster_data = []
 
     for day in range(1, num_days + 1):
-        # Supervisor rotation
-        sup = sorted(SUPERVISORS, key=lambda x: supervisor_counts[x])[0]
-        supervisor_counts[sup] += 1
-        supervisors_by_day[day] = sup
+        date_str = f"{year}-{month:02d}-{day:02d}"
 
-        # Worker selection
-        available = [
+        # -------- SUPERVISOR SELECTION --------
+        available_supervisors = [
+            s for s in st.session_state.supervisors
+            if day not in leave_requests.get(s, [])
+        ]
+
+        available_supervisors.sort(
+            key=lambda x: supervisor_shift_counts[x]
+        )
+
+        supervisor_today = available_supervisors[0]
+        supervisor_shift_counts[supervisor_today] += 1
+
+        # -------- WORKER SELECTION --------
+        available_workers = [
             w for w in st.session_state.workers
             if day not in leave_requests.get(w, [])
         ]
-        available.sort(key=lambda x: worker_counts[x])
-        assigned = available[:WORKERS_PER_DAY]
 
-        for w in assigned:
-            worker_counts[w] += 1
+        if len(available_workers) < WORKERS_PER_DAY:
+            todays_workers = available_workers
+            status = "⚠️ Short Staffed"
+        else:
+            available_workers.sort(
+                key=lambda x: worker_shift_counts[x]
+            )
+            todays_workers = available_workers[:WORKERS_PER_DAY]
+            status = "OK"
 
-        roster[day] = assigned
+        for w in todays_workers:
+            worker_shift_counts[w] += 1
 
-    # ---------------- SHOW ROSTER IN STREAMLIT ----------------
-    st.subheader("📊 Roster Preview")
-    preview_data = []
-    for day in range(1, num_days + 1):
-        day_data = {"Date": day, "Supervisor": supervisors_by_day[day]}
-        for w in st.session_state.workers:
-            if day in leave_requests.get(w, []):
-                day_data[w] = "L"
-            elif w in roster[day]:
-                day_data[w] = "M"
-            else:
-                day_data[w] = "X"
-        preview_data.append(day_data)
+        roster_data.append({
+            "Date": date_str,
+            "Day": pd.to_datetime(date_str).day_name(),
+            "Supervisor": supervisor_today,
+            "Workers Assigned": ", ".join(todays_workers),
+            "Worker Count": len(todays_workers),
+            "Status": status
+        })
 
-    df_preview = pd.DataFrame(preview_data)
-    st.dataframe(df_preview)
+    # ---------------- RESULTS ----------------
+    df = pd.DataFrame(roster_data)
 
-    # ---------------- BUILD EXCEL ----------------
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "ROSTER"
+    col1, col2 = st.columns([2, 1])
 
-    thick = Border(
-        left=Side(style="thick"),
-        right=Side(style="thick"),
-        top=Side(style="thick"),
-        bottom=Side(style="thick")
-    )
-    center = Alignment(horizontal="center", vertical="center")
-    bold = Font(bold=True)
+    with col1:
+        st.subheader("📋 Final Schedule")
+        st.dataframe(df, use_container_width=True)
 
-    # Title
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=num_days + 1)
-    ws["A1"] = f"ROYAL AIR MAROC ROSTER FOR {datetime(year, month, 1).strftime('%B %Y').upper()}"
-    ws["A1"].font = Font(bold=True, size=14)
-    ws["A1"].alignment = center
+    with col2:
+        st.subheader("📊 Worker Workload Balance")
+        stats_df = (
+            pd.DataFrame(worker_shift_counts.items(), columns=["Worker", "Shifts"])
+            .set_index("Worker")
+            .sort_values("Shifts", ascending=False)
+        )
+        st.bar_chart(stats_df)
 
-    row = 3
-    ws["A" + str(row)] = "DATE"
-    ws["A" + str(row)].font = bold
-    for d in range(1, num_days + 1):
-        ws.cell(row=row, column=d + 1, value=d)
-    row += 1
-
-    ws["A" + str(row)] = "DAY"
-    ws["A" + str(row)].font = bold
-    for d in range(1, num_days + 1):
-        day_letter = datetime(year, month, d).strftime("%a")[0]
-        ws.cell(row=row, column=d + 1, value=day_letter)
-    row += 1
-
-    ws["A" + str(row)] = "SUPERVISOR"
-    ws["A" + str(row)].font = bold
-    for d in range(1, num_days + 1):
-        ws.cell(row=row, column=d + 1, value=supervisors_by_day[d])
-    row += 1
-
-    for w in st.session_state.workers:
-        ws["A" + str(row)] = w
-        ws["A" + str(row)].font = bold
-        for d in range(1, num_days + 1):
-            cell = "X"
-            if d in leave_requests.get(w, []):
-                cell = "L"
-            elif w in roster[d]:
-                cell = "M"
-            ws.cell(row=row, column=d + 1, value=cell)
-        row += 1
-
-    for r in ws.iter_rows(min_row=3, max_row=row - 1, min_col=1, max_col=num_days + 1):
-        for c in r:
-            c.border = thick
-            c.alignment = center
-
-    ws.column_dimensions["A"].width = 20
-    for i in range(2, num_days + 2):
-        ws.column_dimensions[get_column_letter(i)].width = 4
-
-    row += 2
-    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=num_days + 1)
-    ws["A" + str(row)] = (
-        "RESUMPTION TIME: M 2330HRS / A 1200HRS   "
-        "KEYNOTE: X-OFF, M-MORNING, A-AFTERNOON, L-LEAVE"
-    )
-    ws["A" + str(row)].alignment = center
-
-    row += 1
-    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=num_days + 1)
-    ws["A" + str(row)] = "PREPARED BY: ONYEWUENYI"
-    ws["A" + str(row)].alignment = center
-    ws["A" + str(row)].font = bold
-
-    # Save to memory
-    excel_buffer = BytesIO()
-    wb.save(excel_buffer)
-    excel_buffer.seek(0)
-
-    st.session_state["excel_file"] = excel_buffer
-    st.session_state["excel_file_name"] = f"ROYAL_AIR_MAROC_ROSTER_{month}_{year}.xlsx"
-    st.success("✅ Excel generated and ready to download!")
-
-# ---------------- DOWNLOAD SECTION ----------------
-st.subheader("📥 Download Roster Excel")
-if "excel_file" in st.session_state:
     st.download_button(
-        "Download Official Roster",
-        data=st.session_state["excel_file"],
-        file_name=st.session_state["excel_file_name"],
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        "📥 Download CSV",
+        df.to_csv(index=False),
+        file_name="swiftroster.csv",
+        mime="text/csv"
     )
-else:
-    st.info("Generate the roster first to enable download.")
