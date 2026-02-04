@@ -9,24 +9,26 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("📅 SwiftRoster Pro – Workers & Supervisor Roster")
+st.title("📅 SwiftRoster Pro – Official Roster & Payout Sheet")
 
 # ---------------- CONSTANT RULES ----------------
 WORKERS_PER_DAY = 8
-SUPERVISORS_PER_DAY = 1
 TOTAL_SUPERVISORS = 3
 
 # ---------------- SESSION STATE ----------------
 if "workers" not in st.session_state:
     st.session_state.workers = [
-        "Alice", "Bob", "Charlie", "Diana",
-        "Edward", "Fiona", "George", "Hannah",
-        "Ian", "Julia"
+        "ONYEWUJI", "NDIMELE", "BELLO", "FASEYE",
+        "IWUNZE", "OZUA", "JAMES", "OLABANJI",
+        "NURUDEEN", "ENEH", "MUSA", "SANI",
+        "ADENIJI", "JOSEPH", "IDOWU"
     ]
 
 if "supervisors" not in st.session_state:
     st.session_state.supervisors = [
-        "Supervisor A", "Supervisor B", "Supervisor C"
+        "SUPERVISOR A",
+        "SUPERVISOR B",
+        "SUPERVISOR C"
     ]
 
 # ---------------- SIDEBAR ----------------
@@ -39,6 +41,7 @@ if st.sidebar.button("➕ Add Worker"):
 
 st.sidebar.subheader("Edit / Remove Workers")
 remove_workers = []
+
 for i, w in enumerate(st.session_state.workers):
     c1, c2 = st.sidebar.columns([4, 1])
     with c1:
@@ -53,7 +56,8 @@ for w in remove_workers:
     st.session_state.workers.remove(w)
 
 # ---------------- SUPERVISORS ----------------
-st.sidebar.header("2️⃣ Supervisor Management (3 Total)")
+st.sidebar.header("2️⃣ Supervisor Management")
+
 for i in range(TOTAL_SUPERVISORS):
     st.session_state.supervisors[i] = st.sidebar.text_input(
         f"Supervisor {i+1}",
@@ -63,18 +67,24 @@ for i in range(TOTAL_SUPERVISORS):
 
 # ---------------- DATE SETTINGS ----------------
 st.sidebar.header("3️⃣ Date Selection")
+
 month = st.sidebar.selectbox(
     "Month", list(range(1, 13)), index=datetime.now().month - 1
 )
+
 year = st.sidebar.number_input(
-    "Year", min_value=2024, max_value=2030, value=2026
+    "Year", min_value=2024, max_value=2035, value=2026
 )
 
 num_days = monthrange(year, month)[1]
 
 # ---------------- LEAVE MANAGEMENT ----------------
 st.sidebar.header("4️⃣ Leave / Blackout Dates")
-st.sidebar.info("Format (one per line):\nAlice: 5, 6, 7")
+st.sidebar.info(
+    "Format (one per line):\n"
+    "ONYEWUJI: 5, 6, 7\n"
+    "SUPERVISOR A: 12"
+)
 
 leave_input = st.sidebar.text_area("Enter Leave Requests")
 
@@ -91,81 +101,85 @@ if leave_input:
             leave_requests[name.strip()] = day_list
 
 # ---------------- GENERATE ROSTER ----------------
-if st.button("🚀 Generate Roster"):
+if st.button("🚀 Generate Official Roster"):
+
     if len(st.session_state.workers) < WORKERS_PER_DAY:
         st.error("❌ Not enough workers to meet daily requirement.")
         st.stop()
 
+    # ---- SHIFT COUNTS ----
     worker_shift_counts = {w: 0 for w in st.session_state.workers}
     supervisor_shift_counts = {s: 0 for s in st.session_state.supervisors}
 
-    roster_data = []
+    # ---- MASTER ROSTER GRID (SINGLE SOURCE OF TRUTH) ----
+    roster_grid = {}
 
+    roster_grid["DATE"] = [str(d) for d in range(1, num_days + 1)]
+    roster_grid["DAY"] = [
+        pd.to_datetime(f"{year}-{month:02d}-{d:02d}").strftime("%a")[0]
+        for d in range(1, num_days + 1)
+    ]
+    roster_grid["SUPERVISOR"] = [""] * num_days
+
+    for worker in st.session_state.workers:
+        roster_grid[worker] = ["X"] * num_days
+
+    # ---- DAILY ASSIGNMENT LOOP ----
     for day in range(1, num_days + 1):
-        date_str = f"{year}-{month:02d}-{day:02d}"
+        idx = day - 1
 
-        # -------- SUPERVISOR SELECTION --------
+        # ----- SUPERVISOR SELECTION -----
         available_supervisors = [
             s for s in st.session_state.supervisors
             if day not in leave_requests.get(s, [])
         ]
 
-        available_supervisors.sort(
-            key=lambda x: supervisor_shift_counts[x]
-        )
+        if available_supervisors:
+            supervisor_today = min(
+                available_supervisors,
+                key=lambda x: supervisor_shift_counts[x]
+            )
+            supervisor_shift_counts[supervisor_today] += 1
+        else:
+            supervisor_today = "NO SUPERVISOR"
 
-        supervisor_today = available_supervisors[0]
-        supervisor_shift_counts[supervisor_today] += 1
+        roster_grid["SUPERVISOR"][idx] = supervisor_today
 
-        # -------- WORKER SELECTION --------
+        # ----- WORKER SELECTION -----
         available_workers = [
             w for w in st.session_state.workers
             if day not in leave_requests.get(w, [])
         ]
 
-        if len(available_workers) < WORKERS_PER_DAY:
-            todays_workers = available_workers
-            status = "⚠️ Short Staffed"
-        else:
-            available_workers.sort(
-                key=lambda x: worker_shift_counts[x]
-            )
-            todays_workers = available_workers[:WORKERS_PER_DAY]
-            status = "OK"
+        available_workers.sort(key=lambda x: worker_shift_counts[x])
+        todays_workers = available_workers[:WORKERS_PER_DAY]
 
-        for w in todays_workers:
-            worker_shift_counts[w] += 1
+        for worker in st.session_state.workers:
+            if day in leave_requests.get(worker, []):
+                roster_grid[worker][idx] = "L"
+            elif worker in todays_workers:
+                roster_grid[worker][idx] = "M"
+                worker_shift_counts[worker] += 1
+            else:
+                roster_grid[worker][idx] = "X"
 
-        roster_data.append({
-            "Date": date_str,
-            "Day": pd.to_datetime(date_str).day_name(),
-            "Supervisor": supervisor_today,
-            "Workers Assigned": ", ".join(todays_workers),
-            "Worker Count": len(todays_workers),
-            "Status": status
-        })
+    # ---- FINAL DATAFRAME (DISPLAY = EXPORT) ----
+    master_df = pd.DataFrame.from_dict(
+        roster_grid,
+        orient="index"
+    )
 
-    # ---------------- RESULTS ----------------
-    df = pd.DataFrame(roster_data)
+    master_df.insert(0, "NAME", master_df.index)
+    master_df.reset_index(drop=True, inplace=True)
 
-    col1, col2 = st.columns([2, 1])
+    # ---------------- DISPLAY ----------------
+    st.subheader("📋 Official Roster (What You See = What You Download)")
+    st.dataframe(master_df, use_container_width=True)
 
-    with col1:
-        st.subheader("📋 Final Schedule")
-        st.dataframe(df, use_container_width=True)
-
-    with col2:
-        st.subheader("📊 Worker Workload Balance")
-        stats_df = (
-            pd.DataFrame(worker_shift_counts.items(), columns=["Worker", "Shifts"])
-            .set_index("Worker")
-            .sort_values("Shifts", ascending=False)
-        )
-        st.bar_chart(stats_df)
-
+    # ---------------- DOWNLOAD ----------------
     st.download_button(
-        "📥 Download CSV",
-        df.to_csv(index=False),
-        file_name="swiftroster.csv",
+        "📥 Download CSV (Exact Layout)",
+        master_df.to_csv(index=False),
+        file_name="swiftroster_official.csv",
         mime="text/csv"
     )
