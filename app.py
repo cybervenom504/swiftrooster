@@ -1,19 +1,13 @@
 import streamlit as st
 import pandas as pd
-from calendar import monthrange
-from datetime import datetime
-from reportlab.lib.pagesizes import landscape, A4
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
-from reportlab.lib import colors
-import tempfile
 
 # ---------------- PAGE CONFIG ----------------
-st.set_page_config(page_title="SwiftRoster Pro", layout="wide")
-st.title("📅 SwiftRoster Pro – Airline Roster Generator")
+st.set_page_config(
+    page_title="Supervisor & Worker Assignment",
+    layout="wide"
+)
 
-# ---------------- CONSTANTS ----------------
-WORKERS_PER_DAY = 8
-TOTAL_SUPERVISORS = 3
+st.title("🧑‍✈️ Supervisor & Worker Assignment Manager")
 
 # ---------------- SESSION STATE ----------------
 if "workers" not in st.session_state:
@@ -26,39 +20,96 @@ if "workers" not in st.session_state:
 
 if "supervisors" not in st.session_state:
     st.session_state.supervisors = [
-        "SUPERVISOR A", "SUPERVISOR B", "SUPERVISOR C"
+        "SUPERVISOR A",
+        "SUPERVISOR B",
+        "SUPERVISOR C"
     ]
 
+if "supervisor_assignments" not in st.session_state:
+    st.session_state.supervisor_assignments = {
+        "SUPERVISOR A": [],
+        "SUPERVISOR B": [],
+        "SUPERVISOR C": []
+    }
+
 # ---------------- SIDEBAR ----------------
-st.sidebar.header("1️⃣ Worker Management")
+st.sidebar.header("👷 Worker Management")
 
 new_worker = st.sidebar.text_input("Add Worker")
 if st.sidebar.button("➕ Add Worker"):
-    if new_worker and new_worker.upper() not in st.session_state.workers:
-        st.session_state.workers.append(new_worker.upper())
+    if new_worker:
+        name = new_worker.strip().upper()
+        if name not in st.session_state.workers:
+            st.session_state.workers.append(name)
 
-st.sidebar.header("2️⃣ Supervisor Management (3 Total)")
-for i in range(TOTAL_SUPERVISORS):
-    st.session_state.supervisors[i] = st.sidebar.text_input(
+st.sidebar.subheader("Current Workers")
+for w in st.session_state.workers:
+    st.sidebar.write("•", w)
+
+st.sidebar.divider()
+
+st.sidebar.header("🧑‍✈️ Supervisor Management (3 Total)")
+
+for i in range(3):
+    sup_name = st.sidebar.text_input(
         f"Supervisor {i+1}",
         st.session_state.supervisors[i],
-        key=f"sup_{i}"
+        key=f"sup_name_{i}"
     ).upper()
 
-# ---------------- DATE SETTINGS ----------------
-st.sidebar.header("3️⃣ Date Selection")
-month = st.sidebar.selectbox("Month", list(range(1, 13)), index=datetime.now().month - 1)
-year = st.sidebar.number_input("Year", 2024, 2030, 2026)
-num_days = monthrange(year, month)[1]
+    old_name = st.session_state.supervisors[i]
+    st.session_state.supervisors[i] = sup_name
 
-# ---------------- LEAVE MANAGEMENT ----------------
-st.sidebar.header("4️⃣ Leave Management")
-st.sidebar.info("Format:\nONYEWUNYI: 5, 6, 7")
+    # Preserve assignments if name changes
+    if old_name != sup_name:
+        st.session_state.supervisor_assignments[sup_name] = (
+            st.session_state.supervisor_assignments.pop(old_name, [])
+        )
 
-leave_input = st.sidebar.text_area("Leave Requests")
-leave_requests = {}
+    assigned_workers = st.sidebar.multiselect(
+        f"{sup_name} → Assign up to 8 workers",
+        st.session_state.workers,
+        default=st.session_state.supervisor_assignments.get(sup_name, []),
+        key=f"sup_assign_{i}"
+    )
 
-if leave_input:
-    for line in leave_input.split("\n"):
-        if ":" in line:
-            name, days
+    if len(assigned_workers) > 8:
+        st.sidebar.warning("⚠️ Maximum is 8 workers per supervisor")
+
+    st.session_state.supervisor_assignments[sup_name] = assigned_workers
+
+# ---------------- MAIN DISPLAY ----------------
+st.subheader("📋 Supervisor → Worker Assignments")
+
+assignment_data = []
+for sup in st.session_state.supervisors:
+    workers = st.session_state.supervisor_assignments.get(sup, [])
+    assignment_data.append({
+        "Supervisor": sup,
+        "Assigned Workers": ", ".join(workers),
+        "Worker Count": len(workers)
+    })
+
+df_assignments = pd.DataFrame(assignment_data)
+st.dataframe(df_assignments, use_container_width=True)
+
+# ---------------- VALIDATION SUMMARY ----------------
+st.subheader("✅ Validation Summary")
+
+for sup, workers in st.session_state.supervisor_assignments.items():
+    if len(workers) == 8:
+        st.success(f"{sup} has exactly 8 workers assigned.")
+    elif len(workers) < 8:
+        st.warning(f"{sup} has {len(workers)} / 8 workers.")
+    else:
+        st.error(f"{sup} exceeds 8 workers!")
+
+# ---------------- EXPORT ----------------
+st.subheader("📥 Export")
+
+st.download_button(
+    "Download Supervisor Assignments (CSV)",
+    df_assignments.to_csv(index=False),
+    file_name="supervisor_worker_assignments.csv",
+    mime="text/csv"
+)
