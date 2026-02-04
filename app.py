@@ -2,208 +2,132 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 from calendar import monthrange
-from io import BytesIO
+from collections import defaultdict
+import tempfile
 from reportlab.lib.pagesizes import landscape, A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
 from reportlab.lib import colors
 
 # ---------------- CONFIG ----------------
 st.set_page_config(page_title="SwiftRoster Pro", layout="wide")
-st.title("📅 SwiftRoster Pro")
+st.title("📅 SwiftRoster Pro – Daily Supervisor Roster")
 
-# ---------------- MONTH SWITCHING ----------------
-c1, c2 = st.columns(2)
+# ---------------- MONTH / YEAR SELECTION ----------------
+st.sidebar.header("📅 Roster Settings")
+year = st.sidebar.selectbox("Year", range(2024, 2031), index=1)
+month = st.sidebar.selectbox(
+    "Month",
+    range(1, 13),
+    format_func=lambda m: datetime(2024, m, 1).strftime("%B")
+)
+total_days = monthrange(year, month)[1]
+dates = list(range(1, total_days + 1))
 
-with c1:
-    year = st.selectbox("Year", list(range(2024, 2031)), index=1)
-
-with c2:
-    month = st.selectbox(
-        "Month",
-        list(range(1, 13)),
-        format_func=lambda m: datetime(2024, m, 1).strftime("%B")
-    )
-
-TOTAL_DAYS = monthrange(year, month)[1]
-DAYS = list(range(1, TOTAL_DAYS + 1))
-
-# ---------------- DATA ----------------
+# ---------------- SUPERVISORS & WORKERS ----------------
+supervisors = ["Supervisor A", "Supervisor B", "Supervisor C"]
 workers = [
-    "ONYEWUNYI", "NDIMELE", "BELLO", "FASEYE",
-    "IWUNZE", "OZUA", "JAMES", "OLABANJI"
+    "Alice", "Bob", "Charlie", "Diana", "Edward",
+    "Fiona", "George", "Hannah", "Ian", "Julia", "Sato"
 ]
 
-supervisors = {
-    "SUPERVISOR A": ["BELLO", "OLABANJI"],
-    "SUPERVISOR B": ["OZUA", "JAMES"],
-    "SUPERVISOR C": ["NDIMELE", "FASEYE"]
-}
-
 # ---------------- STATE ----------------
-st.session_state.setdefault("off_days", {})
-st.session_state.setdefault("leave_days", {})
-st.session_state.setdefault("roster_locked", False)
-st.session_state.setdefault("generated_roster", None)
+st.session_state.setdefault("leave", defaultdict(list))
+st.session_state.setdefault("off", defaultdict(list))
+st.session_state.setdefault("roster", None)
+st.session_state.setdefault("locked", False)
 st.session_state.setdefault("workload", {})
 
-# ---------------- SIDEBAR : LEAVE PANEL ----------------
-st.sidebar.header("🏖 LEAVE PANEL")
+# ---------------- SIDEBAR : SETTINGS ----------------
+workers_per_day = st.sidebar.number_input(
+    "Workers per Day (Max 10)", min_value=1, max_value=10, value=5
+)
+
+# ---------------- SIDEBAR : LEAVE ----------------
+st.sidebar.header("🏖 Leave Panel")
 for w in workers:
-    st.session_state.leave_days[w] = st.sidebar.multiselect(
-        f"{w} – LEAVE",
-        DAYS,
-        st.session_state.leave_days.get(w, []),
-        disabled=st.session_state.roster_locked
+    st.session_state.leave[w] = st.sidebar.multiselect(
+        w,
+        dates,
+        st.session_state.leave[w],
+        disabled=st.session_state.locked
     )
 
-st.sidebar.divider()
-
-# ---------------- SIDEBAR : OFF PANEL ----------------
-st.sidebar.header("📆 OFF PANEL")
-for sup, ws in supervisors.items():
-    st.sidebar.subheader(sup)
-    for w in ws:
-        st.session_state.off_days[w] = st.sidebar.multiselect(
-            f"{w} – OFF",
-            DAYS,
-            st.session_state.off_days.get(w, []),
-            disabled=st.session_state.roster_locked
-        )
-
-# ---------------- SUPERVISOR CHART ----------------
-st.subheader("🧑‍✈️ Supervisor – Worker Assignment")
-
-rows = []
-for sup, ws in supervisors.items():
-    for w in ws:
-        rows.append({"Supervisor": sup, "Worker": w})
-
-st.dataframe(pd.DataFrame(rows), use_container_width=True)
-
-# ---------------- ACTIVE WORKERS ----------------
-active_workers = sorted({w for ws in supervisors.values() for w in ws})
-
-# ---------------- SETTINGS ----------------
-max_workers_limit = min(10, len(active_workers))
-workers_per_day = st.slider(
-    "Workers per day (Max 10)",
-    1,
-    max_workers_limit,
-    min(3, max_workers_limit)
-)
-
-required_work_days = st.slider(
-    "Required work days",
-    1,
-    TOTAL_DAYS,
-    min(18, TOTAL_DAYS)
-)
+# ---------------- SIDEBAR : OFF ----------------
+st.sidebar.header("📆 Off Panel")
+for w in workers:
+    st.session_state.off[w] = st.sidebar.multiselect(
+        w,
+        dates,
+        st.session_state.off[w],
+        disabled=st.session_state.locked
+    )
 
 # ---------------- GENERATE ROSTER ----------------
-if st.button("🚀 Generate Duty Roster"):
+if st.button("🚀 Generate Roster"):
 
-    roster = pd.DataFrame("", index=active_workers, columns=DAYS)
-    duty = {w: 0 for w in active_workers}
+    workload = {w: 0 for w in workers}
+    rows = []
 
-    # Apply LEAVE
-    for w, days in st.session_state.leave_days.items():
-        for d in days:
-            if w in roster.index:
-                roster.loc[w, d] = "L"
+    for d in dates:
+        day_name = datetime(year, month, d).strftime("%A")
+        supervisor = supervisors[(d - 1) % 3]
 
-    # Apply OFF (overrides leave)
-    for w, days in st.session_state.off_days.items():
-        for d in days:
-            if w in roster.index:
-                roster.loc[w, d] = "OFF"
-
-    # Assign DUTY
-    for d in DAYS:
         available = [
-            w for w in active_workers
-            if roster.loc[w, d] == ""
-            and duty[w] < required_work_days
+            w for w in workers
+            if d not in st.session_state.leave[w]
+            and d not in st.session_state.off[w]
         ]
-        available.sort(key=lambda x: duty[x])
 
-        for w in available[:workers_per_day]:
-            roster.loc[w, d] = "M"
-            duty[w] += 1
+        available.sort(key=lambda w: workload[w])
+        assigned = available[:workers_per_day]
 
-    st.session_state.generated_roster = roster
-    st.session_state.workload = duty
-    st.session_state.roster_locked = True
+        for w in assigned:
+            workload[w] += 1
 
-# ---------------- UNLOCK ----------------
-if st.session_state.roster_locked:
-    if st.button("🔓 Unlock Roster"):
-        st.session_state.roster_locked = False
-        st.session_state.generated_roster = None
-        st.session_state.workload = {}
+        rows.append({
+            "Date": d,
+            "Day": day_name,
+            "Supervisor": supervisor,
+            "Workers": ", ".join(assigned)
+        })
 
-# ---------------- DISPLAY & EXPORT ----------------
-if st.session_state.generated_roster is not None:
-    roster = st.session_state.generated_roster
+    st.session_state.roster = pd.DataFrame(rows)
+    st.session_state.workload = workload
+    st.session_state.locked = True
 
-    def cell(v):
-        if v == "M": color = "#9be7a1"
-        elif v == "OFF": color = "#f9e79f"
-        elif v == "L": color = "#f5b7b1"
-        else: color = "#eee"
-        return f"<td style='text-align:center;background:{color}'>{v}</td>"
-
-    html = """
-    <style>
-    .wrap{overflow-x:auto}
-    table{border-collapse:collapse;min-width:900px}
-    th,td{border:1px solid #999;padding:6px}
-    th:first-child,td:first-child{
-        position:sticky;left:0;background:#111;color:white
-    }
-    </style>
-    <div class='wrap'><table>
-    <tr><th>Worker</th>""" + "".join(f"<th>{d}</th>" for d in DAYS) + "</tr>"
-
-    for w in roster.index:
-        html += f"<tr><td>{w}</td>" + "".join(cell(roster.loc[w, d]) for d in DAYS) + "</tr>"
-
-    html += "</table></div>"
-
+# ---------------- DISPLAY ROSTER ----------------
+if st.session_state.roster is not None:
     st.subheader("📋 Duty Roster")
-    st.markdown(html, unsafe_allow_html=True)
+    st.dataframe(st.session_state.roster, use_container_width=True)
 
-    # ---------------- WORKLOAD CHART ----------------
-    st.subheader("📊 Workload (Days Worked per Worker)")
+    st.subheader("📊 Worker Workload Balance")
     workload_df = pd.DataFrame.from_dict(
-        st.session_state.workload,
-        orient="index",
-        columns=["Days Worked"]
+        st.session_state.workload, orient="index", columns=["Days Worked"]
     )
     st.bar_chart(workload_df)
 
-    # ---------------- EXCEL EXPORT ----------------
-    excel_buffer = BytesIO()
-    roster.reset_index().rename(columns={"index": "Worker"}).to_excel(
-        excel_buffer, index=False
-    )
-    st.download_button(
-        "📥 Download Excel",
-        excel_buffer.getvalue(),
-        file_name=f"roster_{year}_{month}.xlsx"
-    )
+    # ---------------- EXPORT ----------------
+    csv = st.session_state.roster.to_csv(index=False)
+    st.download_button("📥 Download Excel/CSV", csv, "roster.csv")
 
-    # ---------------- PDF EXPORT ----------------
-    pdf_buffer = BytesIO()
-    doc = SimpleDocTemplate(pdf_buffer, pagesize=landscape(A4))
-    table = Table([["Worker"] + DAYS] + roster.reset_index().values.tolist())
-    table.setStyle(TableStyle([
-        ("GRID", (0,0), (-1,-1), 0.5, colors.black),
-        ("FONTSIZE", (0,0), (-1,-1), 7)
-    ]))
-    doc.build([table])
+    # PDF Export
+    def export_pdf(df):
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+        doc = SimpleDocTemplate(tmp.name, pagesize=landscape(A4))
+        table = Table([df.columns.tolist()] + df.values.tolist())
+        table.setStyle(TableStyle([
+            ("GRID", (0,0), (-1,-1), 0.5, colors.black),
+            ("FONTSIZE", (0,0), (-1,-1), 8)
+        ]))
+        doc.build([table])
+        return tmp.name
 
-    st.download_button(
-        "📄 Download PDF",
-        pdf_buffer.getvalue(),
-        file_name=f"roster_{year}_{month}.pdf"
-    )
+    with open(export_pdf(st.session_state.roster), "rb") as f:
+        st.download_button("📄 Download PDF", f, "roster.pdf")
+
+# ---------------- UNLOCK ----------------
+if st.session_state.locked:
+    if st.button("🔓 Unlock Roster"):
+        st.session_state.locked = False
+        st.session_state.roster = None
+        st.session_state.workload = {}
