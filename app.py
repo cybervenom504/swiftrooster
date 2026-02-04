@@ -8,11 +8,7 @@ from reportlab.lib import colors
 import tempfile
 
 # ---------------- PAGE CONFIG ----------------
-st.set_page_config(
-    page_title="SwiftRoster Pro",
-    layout="wide"
-)
-
+st.set_page_config(page_title="SwiftRoster Pro", layout="wide")
 st.title("📅 SwiftRoster Pro – Airline Roster Generator")
 
 # ---------------- CONSTANTS ----------------
@@ -29,7 +25,16 @@ if "workers" not in st.session_state:
     ]
 
 if "supervisors" not in st.session_state:
-    st.session_state.supervisors = ["SUPERVISOR A", "SUPERVISOR B", "SUPERVISOR C"]
+    st.session_state.supervisors = [
+        "SUPERVISOR A",
+        "SUPERVISOR B",
+        "SUPERVISOR C"
+    ]
+
+if "supervisor_assignments" not in st.session_state:
+    st.session_state.supervisor_assignments = {
+        sup: [] for sup in st.session_state.supervisors
+    }
 
 # ---------------- SIDEBAR ----------------
 st.sidebar.header("1️⃣ Worker Management")
@@ -56,14 +61,36 @@ for w in remove_workers:
 
 # ---------------- SUPERVISOR MANAGEMENT ----------------
 st.sidebar.divider()
-st.sidebar.header("2️⃣ Supervisor Management (Max 3)")
+st.sidebar.header("2️⃣ Supervisor Management (Assign 8 Workers Each)")
 
 for i in range(MAX_SUPERVISORS):
-    st.session_state.supervisors[i] = st.sidebar.text_input(
+    sup_name = st.sidebar.text_input(
         f"Supervisor {i+1}",
         st.session_state.supervisors[i],
-        key=f"supervisor_{i}"
+        key=f"sup_{i}"
     ).upper()
+
+    old_name = st.session_state.supervisors[i]
+    st.session_state.supervisors[i] = sup_name
+
+    if old_name != sup_name:
+        st.session_state.supervisor_assignments[sup_name] = (
+            st.session_state.supervisor_assignments.pop(old_name, [])
+        )
+
+    assigned = st.sidebar.multiselect(
+        f"{sup_name} → Select 8 Workers",
+        st.session_state.workers,
+        default=st.session_state.supervisor_assignments.get(sup_name, []),
+        key=f"sup_assign_{i}"
+    )
+
+    if len(assigned) > WORKERS_PER_DAY:
+        st.sidebar.error("❌ Maximum is 8 workers")
+    elif len(assigned) < WORKERS_PER_DAY:
+        st.sidebar.warning(f"⚠️ {len(assigned)} / 8 selected")
+
+    st.session_state.supervisor_assignments[sup_name] = assigned
 
 # ---------------- DATE SETTINGS ----------------
 st.sidebar.divider()
@@ -72,10 +99,7 @@ st.sidebar.header("3️⃣ Date Selection")
 month = st.sidebar.selectbox(
     "Month", list(range(1, 13)), index=datetime.now().month - 1
 )
-year = st.sidebar.number_input(
-    "Year", min_value=2024, max_value=2030, value=2026
-)
-
+year = st.sidebar.number_input("Year", 2024, 2030, 2026)
 num_days = monthrange(year, month)[1]
 
 # ---------------- LEAVE MANAGEMENT ----------------
@@ -83,8 +107,8 @@ st.sidebar.header("4️⃣ Leave Management")
 st.sidebar.info("Format:\nONYEWUNYI: 5, 6, 7")
 
 leave_input = st.sidebar.text_area("Leave Requests")
-
 leave_requests = {}
+
 if leave_input:
     for line in leave_input.split("\n"):
         if ":" in line:
@@ -95,13 +119,19 @@ if leave_input:
                 if d.strip().isdigit() and 1 <= int(d.strip()) <= num_days
             ]
 
-# ---------------- DISPLAY SUPERVISORS ----------------
-st.subheader("🧑‍✈️ Supervisors")
+# ---------------- SUPERVISOR ASSIGNMENT DISPLAY ----------------
+st.subheader("🧑‍✈️ Supervisor → Worker Assignments")
 
-sup_df = pd.DataFrame(
-    {"Supervisor Name": st.session_state.supervisors}
-)
-st.table(sup_df)
+sup_df = pd.DataFrame([
+    {
+        "Supervisor": sup,
+        "Assigned Workers": ", ".join(workers),
+        "Worker Count": len(workers)
+    }
+    for sup, workers in st.session_state.supervisor_assignments.items()
+])
+
+st.dataframe(sup_df, use_container_width=True)
 
 # ---------------- GENERATE ROSTER ----------------
 if st.button("🚀 Generate Roster"):
@@ -121,7 +151,6 @@ if st.button("🚀 Generate Roster"):
         roster_matrix[d] = ["X"] * len(st.session_state.workers)
 
     df_matrix = pd.DataFrame(roster_matrix).set_index("NAME")
-
     worker_shift_counts = {w: 0 for w in st.session_state.workers}
 
     for d in days:
@@ -142,10 +171,7 @@ if st.button("🚀 Generate Roster"):
                 df_matrix.loc[w, d] = "L"
 
     header_rows = pd.DataFrame(
-        [
-            ["DATE"] + days,
-            ["DAY"] + day_letters,
-        ],
+        [["DATE"] + days, ["DAY"] + day_letters],
         columns=["NAME"] + days
     )
 
@@ -162,17 +188,15 @@ if st.button("🚀 Generate Roster"):
 
     with col2:
         st.subheader("📊 Worker Workload Balance")
-
         workload_df = (
             pd.DataFrame(worker_shift_counts.items(), columns=["Worker", "Shifts"])
             .set_index("Worker")
             .sort_values("Shifts", ascending=False)
         )
-
         st.bar_chart(workload_df)
 
     st.download_button(
-        "📥 Download CSV (Image Layout)",
+        "📥 Download CSV",
         export_df.to_csv(index=False),
         file_name="airline_roster.csv",
         mime="text/csv"
@@ -199,10 +223,7 @@ if st.button("🚀 Generate Roster"):
             ("GRID", (0,0), (-1,-1), 0.5, colors.black),
             ("BACKGROUND", (0,0), (-1,1), colors.lightgrey),
             ("ALIGN", (1,0), (-1,-1), "CENTER"),
-            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
             ("FONTSIZE", (0,0), (-1,-1), 7),
-            ("TOPPADDING", (0,0), (-1,-1), 4),
-            ("BOTTOMPADDING", (0,0), (-1,-1), 4),
         ]))
 
         doc.build([table])
@@ -212,7 +233,7 @@ if st.button("🚀 Generate Roster"):
 
     with open(pdf_file, "rb") as f:
         st.download_button(
-            "📄 Download PDF (Image Layout)",
+            "📄 Download PDF",
             f,
             file_name="airline_roster.pdf",
             mime="application/pdf"
