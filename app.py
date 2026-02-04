@@ -12,7 +12,7 @@ st.set_page_config(page_title="SwiftRoster Pro", layout="wide")
 st.title("📅 SwiftRoster Pro – Airline Roster Generator")
 
 # ---------------- CONSTANTS ----------------
-WORKERS_PER_DAY = 8
+WORKERS_PER_DAY = 10          # ⬅️ UPDATED
 MAX_SUPERVISORS = 3
 
 # ---------------- SESSION STATE ----------------
@@ -46,6 +46,7 @@ if st.sidebar.button("➕ Add Worker"):
 
 st.sidebar.subheader("Edit / Remove Workers")
 remove_workers = []
+
 for i, w in enumerate(st.session_state.workers):
     c1, c2 = st.sidebar.columns([4, 1])
     with c1:
@@ -61,7 +62,7 @@ for w in remove_workers:
 
 # ---------------- SUPERVISOR MANAGEMENT ----------------
 st.sidebar.divider()
-st.sidebar.header("2️⃣ Supervisor Management (Assign 8 Workers Each)")
+st.sidebar.header("2️⃣ Supervisor Management (Assign 10 Workers Each)")
 
 for i in range(MAX_SUPERVISORS):
     sup_name = st.sidebar.text_input(
@@ -79,16 +80,16 @@ for i in range(MAX_SUPERVISORS):
         )
 
     assigned = st.sidebar.multiselect(
-        f"{sup_name} → Select 8 Workers",
+        f"{sup_name} → Select 10 Workers",
         st.session_state.workers,
         default=st.session_state.supervisor_assignments.get(sup_name, []),
         key=f"sup_assign_{i}"
     )
 
     if len(assigned) > WORKERS_PER_DAY:
-        st.sidebar.error("❌ Maximum is 8 workers")
+        st.sidebar.error("❌ Maximum is 10 workers")
     elif len(assigned) < WORKERS_PER_DAY:
-        st.sidebar.warning(f"⚠️ {len(assigned)} / 8 selected")
+        st.sidebar.warning(f"⚠️ {len(assigned)} / 10 selected")
 
     st.session_state.supervisor_assignments[sup_name] = assigned
 
@@ -151,16 +152,22 @@ if st.button("🚀 Generate Roster"):
         roster_matrix[d] = ["X"] * len(st.session_state.workers)
 
     df_matrix = pd.DataFrame(roster_matrix).set_index("NAME")
+
     worker_shift_counts = {w: 0 for w in st.session_state.workers}
+    MAX_SHIFTS_PER_WORKER = num_days - 2   # ⬅️ GUARANTEES 2 OFF DAYS
 
     for d in days:
         available = [
             w for w in st.session_state.workers
             if d not in leave_requests.get(w, [])
+            and worker_shift_counts[w] < MAX_SHIFTS_PER_WORKER
         ]
 
         available.sort(key=lambda x: worker_shift_counts[x])
         selected = available[:WORKERS_PER_DAY]
+
+        if len(selected) < WORKERS_PER_DAY:
+            st.warning(f"⚠️ Day {d}: Not enough available workers.")
 
         for w in selected:
             df_matrix.loc[w, d] = "M"
@@ -220,10 +227,10 @@ if st.button("🚀 Generate Roster"):
 
         table = Table(data, repeatRows=2)
         table.setStyle(TableStyle([
-            ("GRID", (0,0), (-1,-1), 0.5, colors.black),
-            ("BACKGROUND", (0,0), (-1,1), colors.lightgrey),
-            ("ALIGN", (1,0), (-1,-1), "CENTER"),
-            ("FONTSIZE", (0,0), (-1,-1), 7),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.black),
+            ("BACKGROUND", (0, 0), (-1, 1), colors.lightgrey),
+            ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+            ("FONTSIZE", (0, 0), (-1, -1), 7),
         ]))
 
         doc.build([table])
