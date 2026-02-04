@@ -10,7 +10,7 @@ st.set_page_config(page_title="SwiftRoster Pro", layout="wide")
 st.title("📅 SwiftRoster Pro – Airline Roster Generator")
 
 # ---------------- CONSTANTS ----------------
-DAYS = list(range(1, 32))          # ⬅️ FIXED 31 DAYS
+DAYS = list(range(1, 32))
 WORKERS_PER_DAY = 10
 MAX_SUPERVISORS = 3
 REQUIRED_WORK_DAYS = 18
@@ -63,7 +63,7 @@ for w in remove_workers:
 
 # ---------------- SUPERVISOR MANAGEMENT ----------------
 st.sidebar.divider()
-st.sidebar.header("2️⃣ Supervisor Management (10 Workers Each)")
+st.sidebar.header("2️⃣ Supervisor Management (Manual Assignment)")
 
 for i in range(MAX_SUPERVISORS):
     sup_name = st.sidebar.text_input(
@@ -81,28 +81,23 @@ for i in range(MAX_SUPERVISORS):
         )
 
     assigned = st.sidebar.multiselect(
-        f"{sup_name} → Select 10 Workers",
+        f"{sup_name} → Assign Workers",
         st.session_state.workers,
         default=st.session_state.supervisor_assignments.get(sup_name, []),
         key=f"sup_assign_{i}"
     )
 
-    if len(assigned) > WORKERS_PER_DAY:
-        st.sidebar.error("❌ Maximum is 10 workers")
-    elif len(assigned) < WORKERS_PER_DAY:
-        st.sidebar.warning(f"⚠️ {len(assigned)} / 10 selected")
-
     st.session_state.supervisor_assignments[sup_name] = assigned
 
-# ---------------- INFO ----------------
-st.info(
-    f"""
-🗓 **Roster Format:** Fixed 31 Days  
-🛫 **Duty Days per Worker:** {REQUIRED_WORK_DAYS}  
-🏖 **Off Days per Worker:** {OFF_DAYS}  
-👥 **Workers per Day:** {WORKERS_PER_DAY}
-"""
-)
+# ---------------- ACTIVE WORKERS ----------------
+assigned_workers = sorted({
+    w
+    for workers in st.session_state.supervisor_assignments.values()
+    for w in workers
+})
+
+st.subheader("✅ Active Workers (Supervisor Assigned)")
+st.write(", ".join(assigned_workers) if assigned_workers else "❌ No workers assigned")
 
 # ---------------- SUPERVISOR DISPLAY ----------------
 st.subheader("🧑‍✈️ Supervisor → Worker Assignments")
@@ -121,17 +116,21 @@ st.dataframe(sup_df, use_container_width=True)
 # ---------------- GENERATE ROSTER ----------------
 if st.button("🚀 Generate Roster"):
 
-    roster_matrix = {"NAME": st.session_state.workers}
+    if not assigned_workers:
+        st.error("❌ No workers assigned to supervisors.")
+        st.stop()
+
+    roster_matrix = {"NAME": assigned_workers}
     for d in DAYS:
-        roster_matrix[d] = ["O"] * len(st.session_state.workers)
+        roster_matrix[d] = ["O"] * len(assigned_workers)
 
     df_matrix = pd.DataFrame(roster_matrix).set_index("NAME")
 
-    worker_shift_counts = {w: 0 for w in st.session_state.workers}
+    worker_shift_counts = {w: 0 for w in assigned_workers}
 
     for d in DAYS:
         available = [
-            w for w in st.session_state.workers
+            w for w in assigned_workers
             if worker_shift_counts[w] < REQUIRED_WORK_DAYS
         ]
 
@@ -150,7 +149,7 @@ if st.button("🚀 Generate Roster"):
     col1, col2 = st.columns([3, 1])
 
     with col1:
-        st.subheader("📋 31-Day Duty Roster")
+        st.subheader("📋 31-Day Duty Roster (Assigned Workers Only)")
         st.dataframe(export_df, use_container_width=True)
 
     with col2:
@@ -163,12 +162,12 @@ if st.button("🚀 Generate Roster"):
         )
 
         st.bar_chart(workload_df)
-        st.caption("✅ All workers should show **18 days**")
+        st.caption("✅ Each worker should show **18 days**")
 
     st.download_button(
         "📥 Download CSV",
         export_df.to_csv(index=False),
-        file_name="airline_roster_31_days.csv",
+        file_name="airline_roster_assigned_workers.csv",
         mime="text/csv"
     )
 
@@ -206,6 +205,6 @@ if st.button("🚀 Generate Roster"):
         st.download_button(
             "📄 Download PDF",
             f,
-            file_name="airline_roster_31_days.pdf",
+            file_name="airline_roster_assigned_workers.pdf",
             mime="application/pdf"
         )
