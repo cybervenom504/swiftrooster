@@ -172,6 +172,19 @@ if st.button("🚀 Generate Official Roster"):
     master_df.insert(0, "NAME", master_df.index)
     master_df.reset_index(drop=True, inplace=True)
 
+    # ---- CALCULATE WORKLOAD ----
+    workload = {}
+    for worker in st.session_state.workers:
+        # Count how many "M" (working days) each worker has
+        workload[worker] = sum(1 for val in roster_grid[worker] if val == "M")
+
+    # Append workload row at the bottom of the dataframe
+    workload_row = {"NAME": "WORKLOAD", "DATE": "", "DAY": "", "SUPERVISOR": ""}
+    for worker in st.session_state.workers:
+        workload_row[worker] = workload[worker]
+
+    master_df = pd.concat([master_df, pd.DataFrame([workload_row])], ignore_index=True)
+
     # ---------------- DISPLAY ----------------
     st.subheader("📋 Official Roster (What You See = What You Download)")
     st.dataframe(master_df, use_container_width=True)
