@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 from datetime import datetime
+from calendar import monthrange
 from reportlab.lib.pagesizes import landscape, A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
 from reportlab.lib import colors
@@ -12,8 +13,11 @@ from reportlab.lib import colors
 st.set_page_config(page_title="SwiftRoster Pro", layout="wide")
 st.title("📅 SwiftRoster Pro – Airline Roster Generator")
 
+# ---------------- DATE SAFE SETUP ----------------
+year, month = datetime.now().year, datetime.now().month
+DAYS = list(range(1, monthrange(year, month)[1] + 1))
+
 # ---------------- CONSTANTS ----------------
-DAYS = list(range(1, 32))
 STATE_FILE = "roster_state.json"
 
 # ---------------- PERSISTENCE ----------------
@@ -33,22 +37,26 @@ for k, v in stored.items():
         st.session_state[k] = v
 
 # ---------------- DEFAULTS ----------------
-st.session_state.setdefault("workers_per_day", 10)
+st.session_state.setdefault("workers_per_day", 3)
 st.session_state.setdefault("required_work_days", 18)
 st.session_state.setdefault("max_supervisors", 3)
 st.session_state.setdefault("is_admin", False)
+
 st.session_state.setdefault("workers", [
     "ONYEWUNYI","NDIMELE","BELLO","FASEYE","IWUNZE","OZUA",
     "JAMES","OLABANJI","NURUDEEN","ENEH","MUSA","SANI",
     "ADENIJI","JOSEPH","IDOWU"
 ])
+
 st.session_state.setdefault("supervisors", [
     "SUPERVISOR A","SUPERVISOR B","SUPERVISOR C"
 ])
+
 st.session_state.setdefault(
     "supervisor_assignments",
     {sup: [] for sup in st.session_state.supervisors}
 )
+
 st.session_state.setdefault("leave_days", {})
 st.session_state.setdefault("off_days", {})
 st.session_state.setdefault("admin_pin", "1234")
@@ -58,7 +66,10 @@ st.sidebar.header("🔐 Admin Access")
 pin = st.sidebar.text_input("Enter Admin PIN", type="password")
 if pin:
     st.session_state.is_admin = pin == st.session_state.admin_pin
-    st.sidebar.success("Admin access granted") if st.session_state.is_admin else st.sidebar.error("Invalid PIN")
+    if st.session_state.is_admin:
+        st.sidebar.success("Admin access granted")
+    else:
+        st.sidebar.error("Invalid PIN")
 
 # ---------------- ADMIN CONTROLS ----------------
 if st.session_state.is_admin:
@@ -89,7 +100,7 @@ if st.session_state.is_admin:
 
     st.sidebar.divider()
     st.sidebar.header("🏖 Admin Controlled Leave")
-    max_leave = 31 - st.session_state.required_work_days
+    max_leave = len(DAYS) - st.session_state.required_work_days
     active_workers = sorted({w for ws in st.session_state.supervisor_assignments.values() for w in ws})
     for w in active_workers:
         leave = st.sidebar.multiselect(
@@ -109,7 +120,7 @@ st.write(", ".join(active_workers) if active_workers else "No workers assigned")
 st.sidebar.divider()
 st.sidebar.header("📆 Viewer Controlled OFF Days")
 if not st.session_state.is_admin and active_workers:
-    max_off = 31 - st.session_state.required_work_days
+    max_off = len(DAYS) - st.session_state.required_work_days
     for w in active_workers:
         blocked = set(st.session_state.leave_days.get(w, []))
         off = st.sidebar.multiselect(
@@ -137,29 +148,36 @@ if st.button("🚀 Generate Roster"):
                 roster.loc[w, d] = "O"
 
     for d in DAYS:
-        available = [w for w in active_workers if roster.loc[w, d] == "O" and duty[w] < st.session_state.required_work_days]
+        available = [
+            w for w in active_workers
+            if roster.loc[w, d] == "O"
+            and duty[w] < st.session_state.required_work_days
+        ]
         available.sort(key=lambda x: duty[x])
         for w in available[:st.session_state.workers_per_day]:
             roster.loc[w, d] = "M"
             duty[w] += 1
 
     # ---------------- HTML TABLE (NO STYLER) ----------------
-    year, month = datetime.now().year, datetime.now().month
-    days = [datetime(year, month, d).strftime("%a")[0] for d in DAYS]
+    day_headers = [datetime(year, month, d).strftime("%a")[0] for d in DAYS]
 
     def cell(val):
-        colors = {"M": "#90ee90", "O": "#d3d3d3", "L": "#ff7f7f"}
-        return f"<td style='background:{colors.get(val,'white')};text-align:center'>{val}</td>"
+        colors_map = {"M": "#90ee90", "O": "#d3d3d3", "L": "#ff7f7f"}
+        return f"<td style='background:{colors_map.get(val)};text-align:center;border:1px solid #999'>{val}</td>"
 
     html = "<table style='border-collapse:collapse;width:100%'>"
-    html += "<tr><th>Worker</th>" + "".join(f"<th>{d}</th>" for d in days) + "</tr>"
+    html += "<tr><th style='border:1px solid #999'>Worker</th>"
+    html += "".join(f"<th style='border:1px solid #999'>{d}</th>" for d in day_headers)
+    html += "</tr>"
 
     for w in roster.index:
-        html += f"<tr><td><b>{w}</b></td>" + "".join(cell(roster.loc[w, d]) for d in DAYS) + "</tr>"
+        html += f"<tr><td style='border:1px solid #999'><b>{w}</b></td>"
+        html += "".join(cell(roster.loc[w, d]) for d in DAYS)
+        html += "</tr>"
 
     html += "</table>"
 
-    st.subheader("📋 31-Day Duty Roster")
+    st.subheader("📋 Duty Roster")
     st.markdown(html, unsafe_allow_html=True)
 
     st.subheader("📊 Duty Days")
@@ -173,8 +191,8 @@ if st.button("🚀 Generate Roster"):
         doc = SimpleDocTemplate(tmp.name, pagesize=landscape(A4))
         table = Table([["NAME"] + DAYS] + df.reset_index().values.tolist())
         table.setStyle(TableStyle([
-            ("GRID", (0,0), (-1,-1), 0.5, colors.black),
-            ("FONTSIZE", (0,0), (-1,-1), 7)
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.black),
+            ("FONTSIZE", (0, 0), (-1, -1), 7)
         ]))
         doc.build([table])
         return tmp.name
