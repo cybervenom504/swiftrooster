@@ -27,8 +27,8 @@ def save_state():
     with open(STATE_FILE, "w") as f:
         json.dump(dict(st.session_state), f, indent=4)
 
-stored_state = load_state()
-for k, v in stored_state.items():
+stored = load_state()
+for k, v in stored.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
@@ -53,20 +53,22 @@ st.session_state.setdefault(
     {sup: [] for sup in st.session_state.supervisors}
 )
 
-# 🔹 NEW: leave storage
 st.session_state.setdefault("leave_days", {})  # {worker: [days]}
-
-# ---------------- SECURITY ----------------
 st.session_state.setdefault("admin_pin", "1234")
 st.session_state.setdefault("current_role", "Viewer")
 
+# ---------------- ROLE HELPERS ----------------
 def is_admin():
     return st.session_state.current_role == "Admin"
 
+def is_viewer():
+    return st.session_state.current_role == "Viewer"
+
 # ---------------- SIDEBAR : ACCESS ----------------
-st.sidebar.header("👤 User Access")
+st.sidebar.header("👤 Access Control")
 
 role = st.sidebar.selectbox("Role", ["Viewer", "Admin"])
+
 if role == "Admin":
     pin = st.sidebar.text_input("Admin PIN", type="password")
     if pin == st.session_state.admin_pin:
@@ -79,46 +81,49 @@ if role == "Admin":
 else:
     st.session_state.current_role = "Viewer"
 
-# ---------------- SETTINGS ----------------
+# ---------------- ADMIN SETTINGS ----------------
 st.sidebar.divider()
-st.sidebar.header("⚙️ Roster Settings")
+st.sidebar.header("⚙️ System Settings")
 
 if is_admin():
     st.session_state.workers_per_day = st.sidebar.number_input(
-        "Workers per Day", 1, 50, st.session_state.workers_per_day
+        "Workers Per Day", 1, 50, st.session_state.workers_per_day
     )
+else:
+    st.sidebar.info("🔒 Admin only")
 
 # ---------------- WORKERS ----------------
 st.sidebar.divider()
-st.sidebar.header("👷 Workers")
+st.sidebar.header("👷 Worker Management")
 
 new_worker = st.sidebar.text_input("Add Worker")
+
 if is_admin() and st.sidebar.button("Add Worker"):
     if new_worker and new_worker.upper() not in st.session_state.workers:
         st.session_state.workers.append(new_worker.upper())
 
 # ---------------- SUPERVISORS ----------------
 st.sidebar.divider()
-st.sidebar.header("🧑‍✈️ Supervisors & Assignments")
+st.sidebar.header("🧑‍✈️ Supervisors")
 
 for i in range(st.session_state.max_supervisors):
-    sup_name = st.sidebar.text_input(
+    sup = st.sidebar.text_input(
         f"Supervisor {i+1}",
         st.session_state.supervisors[i]
     ).upper()
 
     old = st.session_state.supervisors[i]
-    st.session_state.supervisors[i] = sup_name
-    st.session_state.supervisor_assignments[sup_name] = \
+    st.session_state.supervisors[i] = sup
+    st.session_state.supervisor_assignments[sup] = \
         st.session_state.supervisor_assignments.pop(old, [])
 
     assigned = st.sidebar.multiselect(
-        f"{sup_name} → Workers",
+        f"{sup} → Assigned Workers",
         st.session_state.workers,
-        st.session_state.supervisor_assignments.get(sup_name, [])
+        st.session_state.supervisor_assignments[sup]
     )
 
-    st.session_state.supervisor_assignments[sup_name] = assigned
+    st.session_state.supervisor_assignments[sup] = assigned
 
 # ---------------- ACTIVE WORKERS ----------------
 active_workers = sorted({
@@ -128,61 +133,67 @@ active_workers = sorted({
 st.subheader("✅ Active Workers")
 st.write(", ".join(active_workers) if active_workers else "No workers assigned")
 
-# ---------------- LEAVE ASSIGNMENT ----------------
-st.subheader("🏖️ Supervisor Leave Assignment")
+# ---------------- SIDEBAR : LEAVE MANAGEMENT ----------------
+st.sidebar.divider()
+st.sidebar.header("📅 Off & Leave Management")
 
-if not active_workers:
-    st.info("Assign workers to supervisors to manage leave")
+if not is_viewer():
+    st.sidebar.info("🔒 Only Viewers can assign leave")
+elif not active_workers:
+    st.sidebar.warning("No active workers")
 else:
+    st.sidebar.caption("Each worker must work exactly 18 days")
+    max_leave = 31 - st.session_state.required_work_days
+
     for w in active_workers:
-        leave = st.multiselect(
+        selected = st.sidebar.multiselect(
             f"{w} – Leave Days",
             DAYS,
-            st.session_state.leave_days.get(w, [])
+            st.session_state.leave_days.get(w, []),
+            help=f"Maximum leave: {max_leave} days"
         )
-        st.session_state.leave_days[w] = leave
 
-        if len(leave) > (31 - st.session_state.required_work_days):
-            st.warning(f"⚠️ {w} has too many leave days")
+        if len(selected) > max_leave:
+            st.sidebar.error("Too many leave days")
+        else:
+            st.session_state.leave_days[w] = selected
 
 # ---------------- GENERATE ROSTER ----------------
 if st.button("🚀 Generate Roster"):
 
     roster = pd.DataFrame("O", index=active_workers, columns=DAYS)
-    duty_count = {w: 0 for w in active_workers}
+    duty = {w: 0 for w in active_workers}
 
-    for w in active_workers:
-        for d in st.session_state.leave_days.get(w, []):
-            roster.loc[w, d] = "L"
+    for w, leave in st.session_state.leave_days.items():
+        for d in leave:
+            if w in roster.index:
+                roster.loc[w, d] = "L"
 
     for d in DAYS:
         available = [
             w for w in active_workers
             if roster.loc[w, d] == "O"
-            and duty_count[w] < st.session_state.required_work_days
+            and duty[w] < st.session_state.required_work_days
         ]
 
-        available.sort(key=lambda x: duty_count[x])
+        available.sort(key=lambda x: duty[x])
         selected = available[:st.session_state.workers_per_day]
 
         for w in selected:
             roster.loc[w, d] = "M"
-            duty_count[w] += 1
+            duty[w] += 1
 
     col1, col2 = st.columns([3, 1])
 
     with col1:
-        st.subheader("📋 31-Day Roster")
+        st.subheader("📋 31-Day Duty Roster")
         st.dataframe(roster.reset_index(), use_container_width=True)
 
     with col2:
-        st.subheader("📊 Duty Days")
-        chart_df = pd.DataFrame.from_dict(
-            duty_count, orient="index", columns=["Duty Days"]
-        )
+        st.subheader("📊 Duty Count")
+        chart_df = pd.DataFrame.from_dict(duty, orient="index", columns=["Days Worked"])
         st.bar_chart(chart_df)
 
-    # ---------------- EXPORT ----------------
     st.download_button(
         "📥 Download CSV",
         roster.reset_index().to_csv(index=False),
