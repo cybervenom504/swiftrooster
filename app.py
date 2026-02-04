@@ -1,7 +1,5 @@
 import streamlit as st
 import pandas as pd
-from calendar import monthrange
-from datetime import datetime
 from reportlab.lib.pagesizes import landscape, A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
 from reportlab.lib import colors
@@ -12,9 +10,11 @@ st.set_page_config(page_title="SwiftRoster Pro", layout="wide")
 st.title("📅 SwiftRoster Pro – Airline Roster Generator")
 
 # ---------------- CONSTANTS ----------------
+DAYS = list(range(1, 32))          # ⬅️ FIXED 31 DAYS
 WORKERS_PER_DAY = 10
 MAX_SUPERVISORS = 3
-REQUIRED_WORK_DAYS = 18   # ⬅️ CORE RULE
+REQUIRED_WORK_DAYS = 18
+OFF_DAYS = 31 - REQUIRED_WORK_DAYS
 
 # ---------------- SESSION STATE ----------------
 if "workers" not in st.session_state:
@@ -94,92 +94,63 @@ for i in range(MAX_SUPERVISORS):
 
     st.session_state.supervisor_assignments[sup_name] = assigned
 
-# ---------------- DATE SETTINGS ----------------
-st.sidebar.divider()
-st.sidebar.header("3️⃣ Date Selection")
-
-month = st.sidebar.selectbox(
-    "Month", list(range(1, 13)), index=datetime.now().month - 1
-)
-year = st.sidebar.number_input("Year", 2024, 2030, 2026)
-num_days = monthrange(year, month)[1]
-
-OFF_DAYS_PER_WORKER = num_days - REQUIRED_WORK_DAYS
-
-st.sidebar.info(
-    f"📌 Each worker will work **{REQUIRED_WORK_DAYS} days**\n"
-    f"📌 Off days per worker: **{OFF_DAYS_PER_WORKER} days**"
+# ---------------- INFO ----------------
+st.info(
+    f"""
+🗓 **Roster Format:** Fixed 31 Days  
+🛫 **Duty Days per Worker:** {REQUIRED_WORK_DAYS}  
+🏖 **Off Days per Worker:** {OFF_DAYS}  
+👥 **Workers per Day:** {WORKERS_PER_DAY}
+"""
 )
 
-# ---------------- LEAVE MANAGEMENT ----------------
-st.sidebar.header("4️⃣ Leave Management")
-st.sidebar.info("Format:\nONYEWUNYI: 5, 6, 7")
+# ---------------- SUPERVISOR DISPLAY ----------------
+st.subheader("🧑‍✈️ Supervisor → Worker Assignments")
 
-leave_input = st.sidebar.text_area("Leave Requests")
-leave_requests = {}
+sup_df = pd.DataFrame([
+    {
+        "Supervisor": sup,
+        "Assigned Workers": ", ".join(workers),
+        "Worker Count": len(workers)
+    }
+    for sup, workers in st.session_state.supervisor_assignments.items()
+])
 
-if leave_input:
-    for line in leave_input.split("\n"):
-        if ":" in line:
-            name, days = line.split(":")
-            leave_requests[name.strip().upper()] = [
-                int(d.strip())
-                for d in days.split(",")
-                if d.strip().isdigit() and 1 <= int(d.strip()) <= num_days
-            ]
+st.dataframe(sup_df, use_container_width=True)
 
 # ---------------- GENERATE ROSTER ----------------
 if st.button("🚀 Generate Roster"):
 
-    days = list(range(1, num_days + 1))
-    day_letters = [
-        pd.to_datetime(f"{year}-{month:02d}-{d:02d}").strftime("%a")[0]
-        for d in days
-    ]
-
     roster_matrix = {"NAME": st.session_state.workers}
-    for d in days:
-        roster_matrix[d] = ["X"] * len(st.session_state.workers)
+    for d in DAYS:
+        roster_matrix[d] = ["O"] * len(st.session_state.workers)
 
     df_matrix = pd.DataFrame(roster_matrix).set_index("NAME")
 
     worker_shift_counts = {w: 0 for w in st.session_state.workers}
 
-    for d in days:
+    for d in DAYS:
         available = [
             w for w in st.session_state.workers
-            if d not in leave_requests.get(w, [])
-            and worker_shift_counts[w] < REQUIRED_WORK_DAYS
+            if worker_shift_counts[w] < REQUIRED_WORK_DAYS
         ]
 
         available.sort(key=lambda x: worker_shift_counts[x])
         selected = available[:WORKERS_PER_DAY]
 
         if len(selected) < WORKERS_PER_DAY:
-            st.warning(f"⚠️ Day {d}: Not enough workers to fill all slots.")
+            st.warning(f"⚠️ Day {d}: Staffing shortage")
 
         for w in selected:
             df_matrix.loc[w, d] = "M"
             worker_shift_counts[w] += 1
 
-        for w, leave_days in leave_requests.items():
-            if d in leave_days and w in df_matrix.index:
-                df_matrix.loc[w, d] = "L"
-
-    header_rows = pd.DataFrame(
-        [["DATE"] + days, ["DAY"] + day_letters],
-        columns=["NAME"] + days
-    )
-
-    export_df = pd.concat(
-        [header_rows, df_matrix.reset_index()],
-        ignore_index=True
-    )
+    export_df = df_matrix.reset_index()
 
     col1, col2 = st.columns([3, 1])
 
     with col1:
-        st.subheader("📋 Final Roster")
+        st.subheader("📋 31-Day Duty Roster")
         st.dataframe(export_df, use_container_width=True)
 
     with col2:
@@ -192,13 +163,12 @@ if st.button("🚀 Generate Roster"):
         )
 
         st.bar_chart(workload_df)
-
-        st.caption("✅ Each worker should show **18 duty days**")
+        st.caption("✅ All workers should show **18 days**")
 
     st.download_button(
         "📥 Download CSV",
         export_df.to_csv(index=False),
-        file_name="airline_roster.csv",
+        file_name="airline_roster_31_days.csv",
         mime="text/csv"
     )
 
@@ -219,10 +189,10 @@ if st.button("🚀 Generate Roster"):
 
         data = [df.columns.tolist()] + df.values.tolist()
 
-        table = Table(data, repeatRows=2)
+        table = Table(data, repeatRows=1)
         table.setStyle(TableStyle([
             ("GRID", (0, 0), (-1, -1), 0.5, colors.black),
-            ("BACKGROUND", (0, 0), (-1, 1), colors.lightgrey),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
             ("ALIGN", (1, 0), (-1, -1), "CENTER"),
             ("FONTSIZE", (0, 0), (-1, -1), 7),
         ]))
@@ -236,6 +206,6 @@ if st.button("🚀 Generate Roster"):
         st.download_button(
             "📄 Download PDF",
             f,
-            file_name="airline_roster.pdf",
+            file_name="airline_roster_31_days.pdf",
             mime="application/pdf"
         )
