@@ -17,6 +17,7 @@ st.title("📅 SwiftRoster Pro – Airline Roster Generator")
 
 # ---------------- CONSTANTS ----------------
 WORKERS_PER_DAY = 8
+MAX_SUPERVISORS = 3
 
 # ---------------- SESSION STATE ----------------
 if "workers" not in st.session_state:
@@ -26,6 +27,9 @@ if "workers" not in st.session_state:
         "NURUDEEN", "ENEH", "MUSA", "SANI",
         "ADENIJI", "JOSEPH", "IDOWU"
     ]
+
+if "supervisors" not in st.session_state:
+    st.session_state.supervisors = ["SUPERVISOR A", "SUPERVISOR B", "SUPERVISOR C"]
 
 # ---------------- SIDEBAR ----------------
 st.sidebar.header("1️⃣ Worker Management")
@@ -50,8 +54,20 @@ for i, w in enumerate(st.session_state.workers):
 for w in remove_workers:
     st.session_state.workers.remove(w)
 
+# ---------------- SUPERVISOR MANAGEMENT ----------------
+st.sidebar.divider()
+st.sidebar.header("2️⃣ Supervisor Management (Max 3)")
+
+for i in range(MAX_SUPERVISORS):
+    st.session_state.supervisors[i] = st.sidebar.text_input(
+        f"Supervisor {i+1}",
+        st.session_state.supervisors[i],
+        key=f"supervisor_{i}"
+    ).upper()
+
 # ---------------- DATE SETTINGS ----------------
-st.sidebar.header("2️⃣ Date Selection")
+st.sidebar.divider()
+st.sidebar.header("3️⃣ Date Selection")
 
 month = st.sidebar.selectbox(
     "Month", list(range(1, 13)), index=datetime.now().month - 1
@@ -63,7 +79,7 @@ year = st.sidebar.number_input(
 num_days = monthrange(year, month)[1]
 
 # ---------------- LEAVE MANAGEMENT ----------------
-st.sidebar.header("3️⃣ Leave Management")
+st.sidebar.header("4️⃣ Leave Management")
 st.sidebar.info("Format:\nONYEWUNYI: 5, 6, 7")
 
 leave_input = st.sidebar.text_area("Leave Requests")
@@ -79,6 +95,14 @@ if leave_input:
                 if d.strip().isdigit() and 1 <= int(d.strip()) <= num_days
             ]
 
+# ---------------- DISPLAY SUPERVISORS ----------------
+st.subheader("🧑‍✈️ Supervisors")
+
+sup_df = pd.DataFrame(
+    {"Supervisor Name": st.session_state.supervisors}
+)
+st.table(sup_df)
+
 # ---------------- GENERATE ROSTER ----------------
 if st.button("🚀 Generate Roster"):
 
@@ -92,14 +116,12 @@ if st.button("🚀 Generate Roster"):
         for d in days
     ]
 
-    # -------- CREATE MATRIX --------
     roster_matrix = {"NAME": st.session_state.workers}
     for d in days:
         roster_matrix[d] = ["X"] * len(st.session_state.workers)
 
     df_matrix = pd.DataFrame(roster_matrix).set_index("NAME")
 
-    # -------- SHIFT BALANCE --------
     worker_shift_counts = {w: 0 for w in st.session_state.workers}
 
     for d in days:
@@ -119,7 +141,6 @@ if st.button("🚀 Generate Roster"):
             if d in leave_days and w in df_matrix.index:
                 df_matrix.loc[w, d] = "L"
 
-    # -------- HEADER ROWS --------
     header_rows = pd.DataFrame(
         [
             ["DATE"] + days,
@@ -133,7 +154,6 @@ if st.button("🚀 Generate Roster"):
         ignore_index=True
     )
 
-    # ---------------- DISPLAY ----------------
     col1, col2 = st.columns([3, 1])
 
     with col1:
@@ -151,7 +171,6 @@ if st.button("🚀 Generate Roster"):
 
         st.bar_chart(workload_df)
 
-    # ---------------- CSV EXPORT ----------------
     st.download_button(
         "📥 Download CSV (Image Layout)",
         export_df.to_csv(index=False),
@@ -159,7 +178,6 @@ if st.button("🚀 Generate Roster"):
         mime="text/csv"
     )
 
-    # ---------------- PDF EXPORT ----------------
     def export_pdf(df):
         temp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
         pdf_path = temp.name
