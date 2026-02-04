@@ -12,12 +12,12 @@ st.set_page_config(page_title="SwiftRoster Pro", layout="wide")
 st.title("📅 SwiftRoster Pro")
 
 # ---------------- MONTH SWITCHING ----------------
-col_m1, col_m2 = st.columns(2)
+c1, c2 = st.columns(2)
 
-with col_m1:
+with c1:
     year = st.selectbox("Year", list(range(2024, 2031)), index=1)
 
-with col_m2:
+with c2:
     month = st.selectbox(
         "Month",
         list(range(1, 13)),
@@ -44,6 +44,7 @@ st.session_state.setdefault("off_days", {})
 st.session_state.setdefault("leave_days", {})
 st.session_state.setdefault("roster_locked", False)
 st.session_state.setdefault("generated_roster", None)
+st.session_state.setdefault("workload", {})
 
 # ---------------- SIDEBAR : LEAVE PANEL ----------------
 st.sidebar.header("🏖 LEAVE PANEL")
@@ -83,8 +84,20 @@ st.dataframe(pd.DataFrame(rows), use_container_width=True)
 active_workers = sorted({w for ws in supervisors.values() for w in ws})
 
 # ---------------- SETTINGS ----------------
-workers_per_day = st.slider("Workers per day", 1, len(active_workers), 3)
-required_work_days = st.slider("Required work days", 1, TOTAL_DAYS, 18)
+max_workers_limit = min(10, len(active_workers))
+workers_per_day = st.slider(
+    "Workers per day (Max 10)",
+    1,
+    max_workers_limit,
+    min(3, max_workers_limit)
+)
+
+required_work_days = st.slider(
+    "Required work days",
+    1,
+    TOTAL_DAYS,
+    min(18, TOTAL_DAYS)
+)
 
 # ---------------- GENERATE ROSTER ----------------
 if st.button("🚀 Generate Duty Roster"):
@@ -92,19 +105,19 @@ if st.button("🚀 Generate Duty Roster"):
     roster = pd.DataFrame("", index=active_workers, columns=DAYS)
     duty = {w: 0 for w in active_workers}
 
-    # LEAVE
+    # Apply LEAVE
     for w, days in st.session_state.leave_days.items():
         for d in days:
             if w in roster.index:
                 roster.loc[w, d] = "L"
 
-    # OFF (overrides leave)
+    # Apply OFF (overrides leave)
     for w, days in st.session_state.off_days.items():
         for d in days:
             if w in roster.index:
                 roster.loc[w, d] = "OFF"
 
-    # DUTY
+    # Assign DUTY
     for d in DAYS:
         available = [
             w for w in active_workers
@@ -118,6 +131,7 @@ if st.button("🚀 Generate Duty Roster"):
             duty[w] += 1
 
     st.session_state.generated_roster = roster
+    st.session_state.workload = duty
     st.session_state.roster_locked = True
 
 # ---------------- UNLOCK ----------------
@@ -125,6 +139,7 @@ if st.session_state.roster_locked:
     if st.button("🔓 Unlock Roster"):
         st.session_state.roster_locked = False
         st.session_state.generated_roster = None
+        st.session_state.workload = {}
 
 # ---------------- DISPLAY & EXPORT ----------------
 if st.session_state.generated_roster is not None:
@@ -157,7 +172,16 @@ if st.session_state.generated_roster is not None:
     st.subheader("📋 Duty Roster")
     st.markdown(html, unsafe_allow_html=True)
 
-    # -------- EXCEL EXPORT --------
+    # ---------------- WORKLOAD CHART ----------------
+    st.subheader("📊 Workload (Days Worked per Worker)")
+    workload_df = pd.DataFrame.from_dict(
+        st.session_state.workload,
+        orient="index",
+        columns=["Days Worked"]
+    )
+    st.bar_chart(workload_df)
+
+    # ---------------- EXCEL EXPORT ----------------
     excel_buffer = BytesIO()
     roster.reset_index().rename(columns={"index": "Worker"}).to_excel(
         excel_buffer, index=False
@@ -168,7 +192,7 @@ if st.session_state.generated_roster is not None:
         file_name=f"roster_{year}_{month}.xlsx"
     )
 
-    # -------- PDF EXPORT --------
+    # ---------------- PDF EXPORT ----------------
     pdf_buffer = BytesIO()
     doc = SimpleDocTemplate(pdf_buffer, pagesize=landscape(A4))
     table = Table([["Worker"] + DAYS] + roster.reset_index().values.tolist())
