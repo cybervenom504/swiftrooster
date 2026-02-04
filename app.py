@@ -163,35 +163,33 @@ if st.button("🚀 Generate Official Roster"):
             else:
                 roster_grid[worker][idx] = "X"
 
-    # ---- FINAL DATAFRAME (DISPLAY = EXPORT) ----
+    # ---- FINAL DATAFRAME (FOR DOWNLOAD) ----
     master_df = pd.DataFrame.from_dict(
         roster_grid,
         orient="index"
     )
-
     master_df.insert(0, "NAME", master_df.index)
     master_df.reset_index(drop=True, inplace=True)
 
     # ---- CALCULATE WORKLOAD ----
     workload = {}
     for worker in st.session_state.workers:
-        # Count how many "M" (working days) each worker has
         workload[worker] = sum(1 for val in roster_grid[worker] if val == "M")
 
-    # Append workload row at the bottom of the dataframe
-    workload_row = {"NAME": "WORKLOAD", "DATE": "", "DAY": "", "SUPERVISOR": ""}
+    # Append workload row for download
+    workload_row_download = {"NAME": "WORKLOAD", "DATE": "", "DAY": "", "SUPERVISOR": ""}
     for worker in st.session_state.workers:
-        workload_row[worker] = workload[worker]
+        workload_row_download[worker] = workload[worker]
+    master_df = pd.concat([master_df, pd.DataFrame([workload_row_download])], ignore_index=True)
 
-    master_df = pd.concat([master_df, pd.DataFrame([workload_row])], ignore_index=True)
+    # ---- DISPLAY IN APP (WORKERS ONLY, HIDE SUPERVISORS) ----
+    display_df = master_df.drop(columns=["SUPERVISOR"])
+    st.subheader("📋 Official Roster (Workers Only)")
+    st.dataframe(display_df, use_container_width=True)
 
-    # ---------------- DISPLAY ----------------
-    st.subheader("📋 Official Roster (What You See = What You Download)")
-    st.dataframe(master_df, use_container_width=True)
-
-    # ---------------- DOWNLOAD ----------------
+    # ---- DOWNLOAD FULL CSV (WITH SUPERVISORS) ----
     st.download_button(
-        "📥 Download CSV (Exact Layout)",
+        "📥 Download CSV (Full Roster with Supervisors)",
         master_df.to_csv(index=False),
         file_name="swiftroster_official.csv",
         mime="text/csv"
