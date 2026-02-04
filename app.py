@@ -12,8 +12,9 @@ st.set_page_config(page_title="SwiftRoster Pro", layout="wide")
 st.title("📅 SwiftRoster Pro – Airline Roster Generator")
 
 # ---------------- CONSTANTS ----------------
-WORKERS_PER_DAY = 10          # ⬅️ UPDATED
+WORKERS_PER_DAY = 10
 MAX_SUPERVISORS = 3
+REQUIRED_WORK_DAYS = 18   # ⬅️ CORE RULE
 
 # ---------------- SESSION STATE ----------------
 if "workers" not in st.session_state:
@@ -62,7 +63,7 @@ for w in remove_workers:
 
 # ---------------- SUPERVISOR MANAGEMENT ----------------
 st.sidebar.divider()
-st.sidebar.header("2️⃣ Supervisor Management (Assign 10 Workers Each)")
+st.sidebar.header("2️⃣ Supervisor Management (10 Workers Each)")
 
 for i in range(MAX_SUPERVISORS):
     sup_name = st.sidebar.text_input(
@@ -103,6 +104,13 @@ month = st.sidebar.selectbox(
 year = st.sidebar.number_input("Year", 2024, 2030, 2026)
 num_days = monthrange(year, month)[1]
 
+OFF_DAYS_PER_WORKER = num_days - REQUIRED_WORK_DAYS
+
+st.sidebar.info(
+    f"📌 Each worker will work **{REQUIRED_WORK_DAYS} days**\n"
+    f"📌 Off days per worker: **{OFF_DAYS_PER_WORKER} days**"
+)
+
 # ---------------- LEAVE MANAGEMENT ----------------
 st.sidebar.header("4️⃣ Leave Management")
 st.sidebar.info("Format:\nONYEWUNYI: 5, 6, 7")
@@ -120,26 +128,8 @@ if leave_input:
                 if d.strip().isdigit() and 1 <= int(d.strip()) <= num_days
             ]
 
-# ---------------- SUPERVISOR ASSIGNMENT DISPLAY ----------------
-st.subheader("🧑‍✈️ Supervisor → Worker Assignments")
-
-sup_df = pd.DataFrame([
-    {
-        "Supervisor": sup,
-        "Assigned Workers": ", ".join(workers),
-        "Worker Count": len(workers)
-    }
-    for sup, workers in st.session_state.supervisor_assignments.items()
-])
-
-st.dataframe(sup_df, use_container_width=True)
-
 # ---------------- GENERATE ROSTER ----------------
 if st.button("🚀 Generate Roster"):
-
-    if len(st.session_state.workers) < WORKERS_PER_DAY:
-        st.error("❌ Not enough workers.")
-        st.stop()
 
     days = list(range(1, num_days + 1))
     day_letters = [
@@ -154,20 +144,19 @@ if st.button("🚀 Generate Roster"):
     df_matrix = pd.DataFrame(roster_matrix).set_index("NAME")
 
     worker_shift_counts = {w: 0 for w in st.session_state.workers}
-    MAX_SHIFTS_PER_WORKER = num_days - 2   # ⬅️ GUARANTEES 2 OFF DAYS
 
     for d in days:
         available = [
             w for w in st.session_state.workers
             if d not in leave_requests.get(w, [])
-            and worker_shift_counts[w] < MAX_SHIFTS_PER_WORKER
+            and worker_shift_counts[w] < REQUIRED_WORK_DAYS
         ]
 
         available.sort(key=lambda x: worker_shift_counts[x])
         selected = available[:WORKERS_PER_DAY]
 
         if len(selected) < WORKERS_PER_DAY:
-            st.warning(f"⚠️ Day {d}: Not enough available workers.")
+            st.warning(f"⚠️ Day {d}: Not enough workers to fill all slots.")
 
         for w in selected:
             df_matrix.loc[w, d] = "M"
@@ -190,17 +179,21 @@ if st.button("🚀 Generate Roster"):
     col1, col2 = st.columns([3, 1])
 
     with col1:
-        st.subheader("📋 Roster Preview")
+        st.subheader("📋 Final Roster")
         st.dataframe(export_df, use_container_width=True)
 
     with col2:
-        st.subheader("📊 Worker Workload Balance")
+        st.subheader("📊 Duty Days per Worker")
+
         workload_df = (
-            pd.DataFrame(worker_shift_counts.items(), columns=["Worker", "Shifts"])
+            pd.DataFrame(worker_shift_counts.items(), columns=["Worker", "Duty Days"])
             .set_index("Worker")
-            .sort_values("Shifts", ascending=False)
+            .sort_values("Duty Days", ascending=False)
         )
+
         st.bar_chart(workload_df)
+
+        st.caption("✅ Each worker should show **18 duty days**")
 
     st.download_button(
         "📥 Download CSV",
@@ -209,6 +202,7 @@ if st.button("🚀 Generate Roster"):
         mime="text/csv"
     )
 
+    # ---------------- PDF EXPORT ----------------
     def export_pdf(df):
         temp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
         pdf_path = temp.name
