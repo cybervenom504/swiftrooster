@@ -235,4 +235,12 @@ if st.button("🚀 Generate Roster"):
         doc.build([table])
         return tmp.name
 
-    with open(export_pdf(roster), "rb") as
+    pdf_path = export_pdf(roster)
+
+with open(pdf_path, "rb") as f:
+    st.download_button(
+        "📄 Download PDF",
+        f,
+        file_name="roster.pdf",
+        mime="application/pdf"
+    )
