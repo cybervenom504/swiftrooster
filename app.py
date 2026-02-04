@@ -1,9 +1,12 @@
 import streamlit as st
 import pandas as pd
+import json
+import os
+import tempfile
+from datetime import datetime
 from reportlab.lib.pagesizes import landscape, A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
 from reportlab.lib import colors
-import tempfile
 
 # ---------------- PAGE CONFIG ----------------
 st.set_page_config(page_title="SwiftRoster Pro", layout="wide")
@@ -11,200 +14,213 @@ st.title("📅 SwiftRoster Pro – Airline Roster Generator")
 
 # ---------------- CONSTANTS ----------------
 DAYS = list(range(1, 32))
-WORKERS_PER_DAY = 10
-MAX_SUPERVISORS = 3
-REQUIRED_WORK_DAYS = 18
-OFF_DAYS = 31 - REQUIRED_WORK_DAYS
+STATE_FILE = "roster_state.json"
 
-# ---------------- SESSION STATE ----------------
-if "workers" not in st.session_state:
-    st.session_state.workers = [
-        "ONYEWUNYI", "NDIMELE", "BELLO", "FASEYE",
-        "IWUNZE", "OZUA", "JAMES", "OLABANJI",
-        "NURUDEEN", "ENEH", "MUSA", "SANI",
-        "ADENIJI", "JOSEPH", "IDOWU"
-    ]
+# ---------------- PERSISTENT STORAGE ----------------
+def load_state():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, "r") as f:
+            return json.load(f)
+    return {}
 
-if "supervisors" not in st.session_state:
-    st.session_state.supervisors = [
-        "SUPERVISOR A",
-        "SUPERVISOR B",
-        "SUPERVISOR C"
-    ]
+def save_state():
+    with open(STATE_FILE, "w") as f:
+        json.dump(dict(st.session_state), f, indent=4)
 
-if "supervisor_assignments" not in st.session_state:
-    st.session_state.supervisor_assignments = {
-        sup: [] for sup in st.session_state.supervisors
-    }
+stored_state = load_state()
+for k, v in stored_state.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
 
-# ---------------- SIDEBAR ----------------
-st.sidebar.header("1️⃣ Worker Management")
+# ---------------- DEFAULTS ----------------
+st.session_state.setdefault("workers_per_day", 10)
+st.session_state.setdefault("required_work_days", 18)
+st.session_state.setdefault("max_supervisors", 3)
+
+st.session_state.setdefault("workers", [
+    "ONYEWUNYI", "NDIMELE", "BELLO", "FASEYE",
+    "IWUNZE", "OZUA", "JAMES", "OLABANJI",
+    "NURUDEEN", "ENEH", "MUSA", "SANI",
+    "ADENIJI", "JOSEPH", "IDOWU"
+])
+
+st.session_state.setdefault("supervisors", [
+    "SUPERVISOR A", "SUPERVISOR B", "SUPERVISOR C"
+])
+
+st.session_state.setdefault(
+    "supervisor_assignments",
+    {sup: [] for sup in st.session_state.supervisors}
+)
+
+# ---------------- SECURITY ----------------
+st.session_state.setdefault("admin_pin", "1234")  # CHANGE IN PRODUCTION
+st.session_state.setdefault("current_role", "Viewer")
+st.session_state.setdefault("audit_log", [])
+
+def is_admin():
+    return st.session_state.current_role == "Admin"
+
+# ---------------- SIDEBAR : ACCESS ----------------
+st.sidebar.header("👤 User Access")
+
+role = st.sidebar.selectbox("Role", ["Viewer", "Admin"])
+if role == "Admin":
+    pin = st.sidebar.text_input("Admin PIN", type="password")
+    if pin == st.session_state.admin_pin:
+        st.session_state.current_role = "Admin"
+        st.sidebar.success("Admin access granted")
+    else:
+        st.session_state.current_role = "Viewer"
+        if pin:
+            st.sidebar.error("Invalid PIN")
+else:
+    st.session_state.current_role = "Viewer"
+
+# ---------------- SIDEBAR : SETTINGS ----------------
+st.sidebar.divider()
+st.sidebar.header("⚙️ Roster Settings")
+
+if is_admin():
+    st.session_state.workers_per_day = st.sidebar.number_input(
+        "Workers per Day", 1, 50, st.session_state.workers_per_day
+    )
+    st.session_state.required_work_days = st.sidebar.number_input(
+        "Required Work Days", 1, 31, st.session_state.required_work_days
+    )
+    st.session_state.max_supervisors = st.sidebar.number_input(
+        "Number of Supervisors", 1, 10, st.session_state.max_supervisors
+    )
+else:
+    st.sidebar.info("🔒 Admin access required")
+
+# ---------------- WORKER MANAGEMENT ----------------
+st.sidebar.divider()
+st.sidebar.header("👷 Workers")
 
 new_worker = st.sidebar.text_input("Add Worker")
-if st.sidebar.button("➕ Add Worker"):
+if is_admin() and st.sidebar.button("Add"):
     if new_worker and new_worker.upper() not in st.session_state.workers:
         st.session_state.workers.append(new_worker.upper())
 
-st.sidebar.subheader("Edit / Remove Workers")
-remove_workers = []
-
-for i, w in enumerate(st.session_state.workers):
-    c1, c2 = st.sidebar.columns([4, 1])
-    with c1:
-        st.session_state.workers[i] = st.text_input(
-            f"Worker {i+1}", w, key=f"worker_{i}"
-        )
-    with c2:
-        if st.button("❌", key=f"remove_worker_{i}"):
-            remove_workers.append(w)
-
-for w in remove_workers:
-    st.session_state.workers.remove(w)
-
-# ---------------- SUPERVISOR MANAGEMENT ----------------
+# ---------------- SUPERVISORS ----------------
 st.sidebar.divider()
-st.sidebar.header("2️⃣ Supervisor Management (Manual Assignment)")
+st.sidebar.header("🧑‍✈️ Supervisors")
 
-for i in range(MAX_SUPERVISORS):
+for i in range(st.session_state.max_supervisors):
     sup_name = st.sidebar.text_input(
         f"Supervisor {i+1}",
-        st.session_state.supervisors[i],
-        key=f"sup_{i}"
+        st.session_state.supervisors[i] if i < len(st.session_state.supervisors) else f"SUPERVISOR {i+1}"
     ).upper()
 
-    old_name = st.session_state.supervisors[i]
-    st.session_state.supervisors[i] = sup_name
-
-    if old_name != sup_name:
-        st.session_state.supervisor_assignments[sup_name] = (
-            st.session_state.supervisor_assignments.pop(old_name, [])
-        )
+    if i < len(st.session_state.supervisors):
+        old = st.session_state.supervisors[i]
+        st.session_state.supervisors[i] = sup_name
+        st.session_state.supervisor_assignments[sup_name] = \
+            st.session_state.supervisor_assignments.pop(old, [])
+    else:
+        st.session_state.supervisors.append(sup_name)
+        st.session_state.supervisor_assignments[sup_name] = []
 
     assigned = st.sidebar.multiselect(
-        f"{sup_name} → Assign Workers",
+        f"{sup_name} → Workers",
         st.session_state.workers,
-        default=st.session_state.supervisor_assignments.get(sup_name, []),
-        key=f"sup_assign_{i}"
+        st.session_state.supervisor_assignments.get(sup_name, [])
     )
 
     st.session_state.supervisor_assignments[sup_name] = assigned
 
 # ---------------- ACTIVE WORKERS ----------------
-assigned_workers = sorted({
-    w
-    for workers in st.session_state.supervisor_assignments.values()
-    for w in workers
+active_workers = sorted({
+    w for ws in st.session_state.supervisor_assignments.values() for w in ws
 })
 
-st.subheader("✅ Active Workers (Supervisor Assigned)")
-st.write(", ".join(assigned_workers) if assigned_workers else "❌ No workers assigned")
+st.subheader("✅ Active Workers")
+st.write(", ".join(active_workers) if active_workers else "No workers assigned")
 
-# ---------------- SUPERVISOR DISPLAY ----------------
-st.subheader("🧑‍✈️ Supervisor → Worker Assignments")
-
+# ---------------- SUPERVISOR TABLE ----------------
+st.subheader("🧑‍✈️ Supervisor Assignments")
 sup_df = pd.DataFrame([
-    {
-        "Supervisor": sup,
-        "Assigned Workers": ", ".join(workers),
-        "Worker Count": len(workers)
-    }
-    for sup, workers in st.session_state.supervisor_assignments.items()
+    {"Supervisor": s, "Workers": ", ".join(w), "Count": len(w)}
+    for s, w in st.session_state.supervisor_assignments.items()
 ])
-
 st.dataframe(sup_df, use_container_width=True)
 
 # ---------------- GENERATE ROSTER ----------------
 if st.button("🚀 Generate Roster"):
 
-    if not assigned_workers:
-        st.error("❌ No workers assigned to supervisors.")
+    if not active_workers:
+        st.error("No assigned workers")
         st.stop()
 
-    roster_matrix = {"NAME": assigned_workers}
-    for d in DAYS:
-        roster_matrix[d] = ["O"] * len(assigned_workers)
-
-    df_matrix = pd.DataFrame(roster_matrix).set_index("NAME")
-
-    worker_shift_counts = {w: 0 for w in assigned_workers}
+    roster = pd.DataFrame("O", index=active_workers, columns=DAYS)
+    counts = {w: 0 for w in active_workers}
 
     for d in DAYS:
-        available = [
-            w for w in assigned_workers
-            if worker_shift_counts[w] < REQUIRED_WORK_DAYS
-        ]
-
-        available.sort(key=lambda x: worker_shift_counts[x])
-        selected = available[:WORKERS_PER_DAY]
-
-        if len(selected) < WORKERS_PER_DAY:
-            st.warning(f"⚠️ Day {d}: Staffing shortage")
+        available = [w for w in active_workers if counts[w] < st.session_state.required_work_days]
+        available.sort(key=lambda x: counts[x])
+        selected = available[:st.session_state.workers_per_day]
 
         for w in selected:
-            df_matrix.loc[w, d] = "M"
-            worker_shift_counts[w] += 1
-
-    export_df = df_matrix.reset_index()
+            roster.loc[w, d] = "M"
+            counts[w] += 1
 
     col1, col2 = st.columns([3, 1])
 
     with col1:
-        st.subheader("📋 31-Day Duty Roster (Assigned Workers Only)")
-        st.dataframe(export_df, use_container_width=True)
+        st.subheader("📋 31-Day Roster")
+        st.dataframe(roster.reset_index(), use_container_width=True)
 
     with col2:
-        st.subheader("📊 Duty Days per Worker")
+        st.subheader("📊 Duty Days")
+        chart_df = pd.DataFrame.from_dict(counts, orient="index", columns=["Duty Days"])
+        st.bar_chart(chart_df)
 
-        workload_df = (
-            pd.DataFrame(worker_shift_counts.items(), columns=["Worker", "Duty Days"])
-            .set_index("Worker")
-            .sort_values("Duty Days", ascending=False)
-        )
-
-        st.bar_chart(workload_df)
-        st.caption("✅ Each worker should show **18 days**")
-
+    # ---------------- EXPORTS ----------------
     st.download_button(
         "📥 Download CSV",
-        export_df.to_csv(index=False),
-        file_name="airline_roster_assigned_workers.csv",
-        mime="text/csv"
+        roster.reset_index().to_csv(index=False),
+        "roster.csv"
     )
 
-    # ---------------- PDF EXPORT ----------------
     def export_pdf(df):
-        temp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-        pdf_path = temp.name
-        temp.close()
-
-        doc = SimpleDocTemplate(
-            pdf_path,
-            pagesize=landscape(A4),
-            rightMargin=20,
-            leftMargin=20,
-            topMargin=20,
-            bottomMargin=20
-        )
-
-        data = [df.columns.tolist()] + df.values.tolist()
-
-        table = Table(data, repeatRows=1)
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+        doc = SimpleDocTemplate(tmp.name, pagesize=landscape(A4))
+        table = Table([["NAME"] + DAYS] + df.reset_index().values.tolist())
         table.setStyle(TableStyle([
-            ("GRID", (0, 0), (-1, -1), 0.5, colors.black),
-            ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-            ("ALIGN", (1, 0), (-1, -1), "CENTER"),
-            ("FONTSIZE", (0, 0), (-1, -1), 7),
+            ("GRID", (0,0), (-1,-1), 0.5, colors.black),
+            ("FONTSIZE", (0,0), (-1,-1), 7)
         ]))
-
         doc.build([table])
-        return pdf_path
+        return tmp.name
 
-    pdf_file = export_pdf(export_df)
+    pdf = export_pdf(roster)
+    with open(pdf, "rb") as f:
+        st.download_button("📄 Download PDF", f, "roster.pdf")
 
-    with open(pdf_file, "rb") as f:
-        st.download_button(
-            "📄 Download PDF",
-            f,
-            file_name="airline_roster_assigned_workers.pdf",
-            mime="application/pdf"
-        )
+# ---------------- AUDIT LOG ----------------
+st.subheader("📜 Audit Log")
+if st.session_state.audit_log:
+    st.dataframe(pd.DataFrame(st.session_state.audit_log), use_container_width=True)
+else:
+    st.info("No audit events yet")
+
+# ---------------- ADMIN RESET ----------------
+st.sidebar.divider()
+st.sidebar.header("🛡️ Admin Controls")
+
+if is_admin():
+    confirm = st.sidebar.checkbox("I understand this will erase all data")
+    if st.sidebar.button("RESET ALL DATA", disabled=not confirm):
+        st.session_state.audit_log.append({
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "action": "RESET",
+            "by": "Admin"
+        })
+        if os.path.exists(STATE_FILE):
+            os.remove(STATE_FILE)
+        st.session_state.clear()
+        st.experimental_rerun()
+
+# ---------------- SAVE STATE ----------------
+save_state()
