@@ -53,10 +53,12 @@ st.session_state.setdefault(
     {sup: [] for sup in st.session_state.supervisors}
 )
 
+# 🔹 NEW: leave storage
+st.session_state.setdefault("leave_days", {})  # {worker: [days]}
+
 # ---------------- SECURITY ----------------
-st.session_state.setdefault("admin_pin", "1234")  # CHANGE IN PRODUCTION
+st.session_state.setdefault("admin_pin", "1234")
 st.session_state.setdefault("current_role", "Viewer")
-st.session_state.setdefault("audit_log", [])
 
 def is_admin():
     return st.session_state.current_role == "Admin"
@@ -77,7 +79,7 @@ if role == "Admin":
 else:
     st.session_state.current_role = "Viewer"
 
-# ---------------- SIDEBAR : SETTINGS ----------------
+# ---------------- SETTINGS ----------------
 st.sidebar.divider()
 st.sidebar.header("⚙️ Roster Settings")
 
@@ -85,42 +87,30 @@ if is_admin():
     st.session_state.workers_per_day = st.sidebar.number_input(
         "Workers per Day", 1, 50, st.session_state.workers_per_day
     )
-    st.session_state.required_work_days = st.sidebar.number_input(
-        "Required Work Days", 1, 31, st.session_state.required_work_days
-    )
-    st.session_state.max_supervisors = st.sidebar.number_input(
-        "Number of Supervisors", 1, 10, st.session_state.max_supervisors
-    )
-else:
-    st.sidebar.info("🔒 Admin access required")
 
-# ---------------- WORKER MANAGEMENT ----------------
+# ---------------- WORKERS ----------------
 st.sidebar.divider()
 st.sidebar.header("👷 Workers")
 
 new_worker = st.sidebar.text_input("Add Worker")
-if is_admin() and st.sidebar.button("Add"):
+if is_admin() and st.sidebar.button("Add Worker"):
     if new_worker and new_worker.upper() not in st.session_state.workers:
         st.session_state.workers.append(new_worker.upper())
 
 # ---------------- SUPERVISORS ----------------
 st.sidebar.divider()
-st.sidebar.header("🧑‍✈️ Supervisors")
+st.sidebar.header("🧑‍✈️ Supervisors & Assignments")
 
 for i in range(st.session_state.max_supervisors):
     sup_name = st.sidebar.text_input(
         f"Supervisor {i+1}",
-        st.session_state.supervisors[i] if i < len(st.session_state.supervisors) else f"SUPERVISOR {i+1}"
+        st.session_state.supervisors[i]
     ).upper()
 
-    if i < len(st.session_state.supervisors):
-        old = st.session_state.supervisors[i]
-        st.session_state.supervisors[i] = sup_name
-        st.session_state.supervisor_assignments[sup_name] = \
-            st.session_state.supervisor_assignments.pop(old, [])
-    else:
-        st.session_state.supervisors.append(sup_name)
-        st.session_state.supervisor_assignments[sup_name] = []
+    old = st.session_state.supervisors[i]
+    st.session_state.supervisors[i] = sup_name
+    st.session_state.supervisor_assignments[sup_name] = \
+        st.session_state.supervisor_assignments.pop(old, [])
 
     assigned = st.sidebar.multiselect(
         f"{sup_name} → Workers",
@@ -138,32 +128,46 @@ active_workers = sorted({
 st.subheader("✅ Active Workers")
 st.write(", ".join(active_workers) if active_workers else "No workers assigned")
 
-# ---------------- SUPERVISOR TABLE ----------------
-st.subheader("🧑‍✈️ Supervisor Assignments")
-sup_df = pd.DataFrame([
-    {"Supervisor": s, "Workers": ", ".join(w), "Count": len(w)}
-    for s, w in st.session_state.supervisor_assignments.items()
-])
-st.dataframe(sup_df, use_container_width=True)
+# ---------------- LEAVE ASSIGNMENT ----------------
+st.subheader("🏖️ Supervisor Leave Assignment")
+
+if not active_workers:
+    st.info("Assign workers to supervisors to manage leave")
+else:
+    for w in active_workers:
+        leave = st.multiselect(
+            f"{w} – Leave Days",
+            DAYS,
+            st.session_state.leave_days.get(w, [])
+        )
+        st.session_state.leave_days[w] = leave
+
+        if len(leave) > (31 - st.session_state.required_work_days):
+            st.warning(f"⚠️ {w} has too many leave days")
 
 # ---------------- GENERATE ROSTER ----------------
 if st.button("🚀 Generate Roster"):
 
-    if not active_workers:
-        st.error("No assigned workers")
-        st.stop()
-
     roster = pd.DataFrame("O", index=active_workers, columns=DAYS)
-    counts = {w: 0 for w in active_workers}
+    duty_count = {w: 0 for w in active_workers}
+
+    for w in active_workers:
+        for d in st.session_state.leave_days.get(w, []):
+            roster.loc[w, d] = "L"
 
     for d in DAYS:
-        available = [w for w in active_workers if counts[w] < st.session_state.required_work_days]
-        available.sort(key=lambda x: counts[x])
+        available = [
+            w for w in active_workers
+            if roster.loc[w, d] == "O"
+            and duty_count[w] < st.session_state.required_work_days
+        ]
+
+        available.sort(key=lambda x: duty_count[x])
         selected = available[:st.session_state.workers_per_day]
 
         for w in selected:
             roster.loc[w, d] = "M"
-            counts[w] += 1
+            duty_count[w] += 1
 
     col1, col2 = st.columns([3, 1])
 
@@ -173,10 +177,12 @@ if st.button("🚀 Generate Roster"):
 
     with col2:
         st.subheader("📊 Duty Days")
-        chart_df = pd.DataFrame.from_dict(counts, orient="index", columns=["Duty Days"])
+        chart_df = pd.DataFrame.from_dict(
+            duty_count, orient="index", columns=["Duty Days"]
+        )
         st.bar_chart(chart_df)
 
-    # ---------------- EXPORTS ----------------
+    # ---------------- EXPORT ----------------
     st.download_button(
         "📥 Download CSV",
         roster.reset_index().to_csv(index=False),
@@ -194,33 +200,8 @@ if st.button("🚀 Generate Roster"):
         doc.build([table])
         return tmp.name
 
-    pdf = export_pdf(roster)
-    with open(pdf, "rb") as f:
+    with open(export_pdf(roster), "rb") as f:
         st.download_button("📄 Download PDF", f, "roster.pdf")
-
-# ---------------- AUDIT LOG ----------------
-st.subheader("📜 Audit Log")
-if st.session_state.audit_log:
-    st.dataframe(pd.DataFrame(st.session_state.audit_log), use_container_width=True)
-else:
-    st.info("No audit events yet")
-
-# ---------------- ADMIN RESET ----------------
-st.sidebar.divider()
-st.sidebar.header("🛡️ Admin Controls")
-
-if is_admin():
-    confirm = st.sidebar.checkbox("I understand this will erase all data")
-    if st.sidebar.button("RESET ALL DATA", disabled=not confirm):
-        st.session_state.audit_log.append({
-            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "action": "RESET",
-            "by": "Admin"
-        })
-        if os.path.exists(STATE_FILE):
-            os.remove(STATE_FILE)
-        st.session_state.clear()
-        st.experimental_rerun()
 
 # ---------------- SAVE STATE ----------------
 save_state()
