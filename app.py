@@ -10,11 +10,13 @@ st.set_page_config(page_title="SwiftRoster Pro", layout="wide")
 st.title("📅 SwiftRoster Pro – Locked Supervisor Roster")
 
 # ---------------- DATE SETUP ----------------
-year, month = datetime.now().year, datetime.now().month
-TOTAL_DAYS = monthrange(year, month)[1]
+today = datetime.now()
+YEAR = today.year
+MONTH = today.month
+TOTAL_DAYS = monthrange(YEAR, MONTH)[1]
 DAYS = list(range(1, TOTAL_DAYS + 1))
 
-# ---------------- STATE FILE ----------------
+# ---------------- STATE STORAGE ----------------
 STATE_FILE = "roster_state.json"
 
 def load_state():
@@ -32,26 +34,25 @@ for k, v in stored.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-# ---------------- DEFAULTS ----------------
+# ---------------- DEFAULT VALUES ----------------
 st.session_state.setdefault("admin_pin", "1234")
 st.session_state.setdefault("is_admin", False)
 
 st.session_state.setdefault("workers", [
-    "ONYEWUNYI","NDIMELE","BELLO","FASEYE","IWUNZE",
-    "OZUA","JAMES","OLABANJI","NURUDEEN","ENEH"
+    "ONYEWUNYI", "NDIMELE", "BELLO", "FASEYE",
+    "IWUNZE", "OZUA", "JAMES", "OLABANJI",
+    "NURUDEEN", "ENEH"
 ])
 
 st.session_state.setdefault("supervisors", [
-    "SUPERVISOR A","SUPERVISOR B","SUPERVISOR C"
+    "SUPERVISOR A", "SUPERVISOR B", "SUPERVISOR C"
 ])
 
-# supervisor -> workers
 st.session_state.setdefault(
     "supervisor_assignments",
     {s: [] for s in st.session_state.supervisors}
 )
 
-# worker -> locked/unlocked
 st.session_state.setdefault(
     "worker_lock",
     {w: True for w in st.session_state.workers}
@@ -61,12 +62,17 @@ st.session_state.setdefault("off_days", {})
 st.session_state.setdefault("workers_per_day", 3)
 st.session_state.setdefault("required_work_days", 18)
 
-# ---------------- ADMIN ACCESS ----------------
+# ---------------- ADMIN LOGIN (FIXED) ----------------
 st.sidebar.header("🔐 Admin Access")
-pin = st.sidebar.text_input("Admin PIN", type="password")
+pin = st.sidebar.text_input("Enter Admin PIN", type="password")
+
 if pin:
-    st.session_state.is_admin = pin == st.session_state.admin_pin
-    st.sidebar.success("Admin access") if st.session_state.is_admin else st.sidebar.error("Invalid PIN")
+    if pin == st.session_state.admin_pin:
+        st.session_state.is_admin = True
+        st.sidebar.success("✅ Admin access granted")
+    else:
+        st.session_state.is_admin = False
+        st.sidebar.error("❌ Invalid PIN")
 
 # ---------------- ADMIN CONTROLS ----------------
 if st.session_state.is_admin:
@@ -74,25 +80,30 @@ if st.session_state.is_admin:
     st.sidebar.header("⚙️ Admin Controls")
 
     st.session_state.workers_per_day = st.sidebar.number_input(
-        "Workers Per Day", 1, 20, st.session_state.workers_per_day
+        "Workers per Day", 1, 20, st.session_state.workers_per_day
     )
 
     st.session_state.required_work_days = st.sidebar.number_input(
-        "Required Work Days", 1, TOTAL_DAYS, st.session_state.required_work_days
+        "Required Work Days",
+        1,
+        TOTAL_DAYS,
+        st.session_state.required_work_days
     )
 
-    st.sidebar.subheader("🔒 Worker Locking (Unlock via Supervisor)")
+    st.sidebar.subheader("🔒 Unlock Workers via Supervisors")
+
     for sup in st.session_state.supervisors:
-        assigned = st.session_state.supervisor_assignments.get(sup, [])
+        current = st.session_state.supervisor_assignments.get(sup, [])
+
         selectable = [
             w for w in st.session_state.workers
-            if st.session_state.worker_lock[w] or w in assigned
+            if st.session_state.worker_lock[w] or w in current
         ]
 
         chosen = st.sidebar.multiselect(
-            f"{sup} → Workers",
+            f"{sup}",
             selectable,
-            assigned,
+            current,
             key=f"assign_{sup}"
         )
 
@@ -111,41 +122,45 @@ if st.session_state.is_admin:
         )
 
 # ---------------- SUPERVISOR OVERVIEW ----------------
-st.subheader("🧑‍✈️ Supervisors & Workers")
+st.subheader("🧑‍✈️ Supervisors & Unlocked Workers")
 
 for sup in st.session_state.supervisors:
     workers = st.session_state.supervisor_assignments.get(sup, [])
-    with st.expander(f"{sup} ({len(workers)} unlocked)"):
+    with st.expander(f"{sup} ({len(workers)} workers)"):
         if workers:
             st.write(", ".join(workers))
         else:
             st.caption("No workers unlocked")
 
 # ---------------- ACTIVE WORKERS ----------------
-active_workers = [w for w in st.session_state.workers if not st.session_state.worker_lock[w]]
+active_workers = [
+    w for w in st.session_state.workers
+    if not st.session_state.worker_lock[w]
+]
 
-st.subheader("✅ Active (Unlocked) Workers")
+st.subheader("✅ Active Workers")
 st.write(", ".join(active_workers) if active_workers else "No active workers")
 
 # ---------------- OFF DAYS ----------------
 MAX_OFF = TOTAL_DAYS - st.session_state.required_work_days
+
 st.sidebar.divider()
 st.sidebar.header("📆 OFF Days")
 
 for w in active_workers:
-    off = st.sidebar.multiselect(
-        f"{w} – OFF Days (max {MAX_OFF})",
+    selected = st.sidebar.multiselect(
+        f"{w} (max {MAX_OFF})",
         DAYS,
         st.session_state.off_days.get(w, [])
     )
-    if len(off) <= MAX_OFF:
-        st.session_state.off_days[w] = off
+    if len(selected) <= MAX_OFF:
+        st.session_state.off_days[w] = selected
 
 # ---------------- GENERATE ROSTER ----------------
 if st.button("🚀 Generate Roster") and active_workers:
 
     roster = pd.DataFrame("O", index=active_workers, columns=DAYS)
-    duty = {w: 0 for w in active_workers}
+    duty_count = {w: 0 for w in active_workers}
 
     for w, offs in st.session_state.off_days.items():
         for d in offs:
@@ -156,19 +171,19 @@ if st.button("🚀 Generate Roster") and active_workers:
         available = [
             w for w in active_workers
             if roster.loc[w, d] == "O"
-            and duty[w] < st.session_state.required_work_days
+            and duty_count[w] < st.session_state.required_work_days
         ]
-        available.sort(key=lambda x: duty[x])
+        available.sort(key=lambda x: duty_count[x])
+
         for w in available[:st.session_state.workers_per_day]:
             roster.loc[w, d] = "M"
-            duty[w] += 1
+            duty_count[w] += 1
 
     # ---------------- RESPONSIVE TABLE ----------------
-    days_header = [datetime(year, month, d).strftime("%a")[0] for d in DAYS]
+    weekday = [datetime(YEAR, MONTH, d).strftime("%a")[0] for d in DAYS]
 
-    def cell(val):
-        colors = {"M": "#9be7a1", "O": "#e0e0e0"}
-        return f"<td style='background:{colors[val]};text-align:center'>{val}</td>"
+    def cell(v):
+        return f"<td style='text-align:center;background:{'#9be7a1' if v=='M' else '#eee'}'>{v}</td>"
 
     html = """
     <style>
@@ -181,8 +196,8 @@ if st.button("🚀 Generate Roster") and active_workers:
         font-weight:bold;
     }
     </style>
-    <div class="wrap"><table>
-    <tr><th>Worker</th>""" + "".join(f"<th>{d}</th>" for d in days_header) + "</tr>"
+    <div class='wrap'><table>
+    <tr><th>Worker</th>""" + "".join(f"<th>{d}</th>" for d in weekday) + "</tr>"
 
     for w in roster.index:
         html += f"<tr><td>{w}</td>" + "".join(cell(roster.loc[w, d]) for d in DAYS) + "</tr>"
@@ -193,7 +208,7 @@ if st.button("🚀 Generate Roster") and active_workers:
     st.markdown(html, unsafe_allow_html=True)
 
     st.subheader("📊 Duty Summary")
-    st.bar_chart(pd.DataFrame.from_dict(duty, orient="index", columns=["Days Worked"]))
+    st.bar_chart(pd.DataFrame.from_dict(duty_count, orient="index", columns=["Days Worked"]))
 
-# ---------------- SAVE ----------------
+# ---------------- SAVE STATE ----------------
 save_state()
