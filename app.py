@@ -1,11 +1,11 @@
 import streamlit as st
-import pandas as pd
 from calendar import monthrange
 from datetime import datetime
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from io import BytesIO
+import pandas as pd
 
 # ---------------- CONFIG ----------------
 st.set_page_config(page_title="SwiftRoster Pro", layout="wide")
@@ -42,7 +42,7 @@ if leave_input:
             ]
 
 # ---------------- GENERATE ROSTER ----------------
-if st.button("🚀 Generate Roster Excel"):
+if st.button("🚀 Generate Roster"):
     num_days = monthrange(year, month)[1]
 
     worker_counts = {w: 0 for w in st.session_state.workers}
@@ -70,6 +70,23 @@ if st.button("🚀 Generate Roster Excel"):
 
         roster[day] = assigned
 
+    # ---------------- SHOW ROSTER IN STREAMLIT ----------------
+    st.subheader("📊 Roster Preview")
+    preview_data = []
+    for day in range(1, num_days + 1):
+        day_data = {"Date": day, "Supervisor": supervisors_by_day[day]}
+        for w in st.session_state.workers:
+            if day in leave_requests.get(w, []):
+                day_data[w] = "L"
+            elif w in roster[day]:
+                day_data[w] = "M"
+            else:
+                day_data[w] = "X"
+        preview_data.append(day_data)
+
+    df_preview = pd.DataFrame(preview_data)
+    st.dataframe(df_preview)
+
     # ---------------- BUILD EXCEL ----------------
     wb = Workbook()
     ws = wb.active
@@ -91,15 +108,12 @@ if st.button("🚀 Generate Roster Excel"):
     ws["A1"].alignment = center
 
     row = 3
-
-    # DATE ROW
     ws["A" + str(row)] = "DATE"
     ws["A" + str(row)].font = bold
     for d in range(1, num_days + 1):
         ws.cell(row=row, column=d + 1, value=d)
     row += 1
 
-    # DAY ROW
     ws["A" + str(row)] = "DAY"
     ws["A" + str(row)].font = bold
     for d in range(1, num_days + 1):
@@ -107,40 +121,33 @@ if st.button("🚀 Generate Roster Excel"):
         ws.cell(row=row, column=d + 1, value=day_letter)
     row += 1
 
-    # SUPERVISOR ROW
     ws["A" + str(row)] = "SUPERVISOR"
     ws["A" + str(row)].font = bold
     for d in range(1, num_days + 1):
         ws.cell(row=row, column=d + 1, value=supervisors_by_day[d])
     row += 1
 
-    # WORKERS
     for w in st.session_state.workers:
         ws["A" + str(row)] = w
         ws["A" + str(row)].font = bold
-
         for d in range(1, num_days + 1):
             cell = "X"
             if d in leave_requests.get(w, []):
                 cell = "L"
             elif w in roster[d]:
                 cell = "M"
-
             ws.cell(row=row, column=d + 1, value=cell)
         row += 1
 
-    # ---------------- STYLING ----------------
     for r in ws.iter_rows(min_row=3, max_row=row - 1, min_col=1, max_col=num_days + 1):
         for c in r:
             c.border = thick
             c.alignment = center
 
-    # Column widths
     ws.column_dimensions["A"].width = 20
     for i in range(2, num_days + 2):
         ws.column_dimensions[get_column_letter(i)].width = 4
 
-    # Footer
     row += 2
     ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=num_days + 1)
     ws["A" + str(row)] = (
@@ -155,25 +162,23 @@ if st.button("🚀 Generate Roster Excel"):
     ws["A" + str(row)].alignment = center
     ws["A" + str(row)].font = bold
 
-    # Save Excel in memory
+    # Save to memory
     excel_buffer = BytesIO()
     wb.save(excel_buffer)
     excel_buffer.seek(0)
 
-    # Store in session state for download
     st.session_state["excel_file"] = excel_buffer
     st.session_state["excel_file_name"] = f"ROYAL_AIR_MAROC_ROSTER_{month}_{year}.xlsx"
-
-    st.success(f"✅ Roster Excel for {month}/{year} generated!")
+    st.success("✅ Excel generated and ready to download!")
 
 # ---------------- DOWNLOAD SECTION ----------------
-st.subheader("Download Excel")
+st.subheader("📥 Download Roster Excel")
 if "excel_file" in st.session_state:
     st.download_button(
-        "📥 Download Official Roster (Excel)",
+        "Download Official Roster",
         data=st.session_state["excel_file"],
         file_name=st.session_state["excel_file_name"],
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 else:
-    st.info("Generate the roster first to download the Excel file.")
+    st.info("Generate the roster first to enable download.")
