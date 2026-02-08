@@ -1,317 +1,342 @@
 import streamlit as st
 import pandas as pd
-import calendar
-from datetime import date
-from reportlab.platypus import (
-    SimpleDocTemplate,
-    Table,
-    TableStyle,
-    Paragraph,
-    Spacer
-)
+import json
+import os
+import tempfile
+from reportlab.lib.pagesizes import landscape, A4
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
 from reportlab.lib import colors
-from reportlab.lib.styles import getSampleStyleSheet
 
-st.set_page_config(layout="wide")
-
-# -------------------------------------------------
-# SESSION STATE DEFAULTS
-# -------------------------------------------------
-if "workers" not in st.session_state:
-    st.session_state.workers = [
-        "JAMES", "IDOWU", "BELLO", "SANI"
-    ]
-
-if "supervisors" not in st.session_state:
-    st.session_state.supervisors = [
-        "ONYEWUENYI", "OLABANJI"
-    ]
-
-if "worker_off_days" not in st.session_state:
-    st.session_state.worker_off_days = {}
-
-if "supervisor_off_days" not in st.session_state:
-    st.session_state.supervisor_off_days = {}
-
-if "assignments" not in st.session_state:
-    # Example grouping
-    st.session_state.assignments = {
-        "ONYEWUENYI": ["JAMES", "IDOWU"],
-        "OLABANJI": ["BELLO", "SANI"]
-    }
-
-if "roster" not in st.session_state:
-    st.session_state.roster = pd.DataFrame()
-
-# -------------------------------------------------
-# 🔐 ADMIN PIN LOCK
-# -------------------------------------------------
-ADMIN_PIN = "1234"
-
-st.sidebar.title("🔐 Admin Access")
-
-pin_input = st.sidebar.text_input(
-    "Enter Admin PIN",
-    type="password"
+# ---------------- PAGE CONFIG ----------------
+st.set_page_config(
+    page_title="SwiftRoster Pro",
+    layout="wide"
 )
 
-admin_unlocked = pin_input == ADMIN_PIN
+st.title("📅 SwiftRoster Pro – Airline Roster Generator")
 
-if admin_unlocked:
-    st.sidebar.success("Admin Unlocked")
-else:
-    st.sidebar.warning("Admin Locked")
+# ---------------- CONSTANTS ----------------
+DAYS = list(range(1, 32))
+STATE_FILE = "roster_state.json"
 
-# -------------------------------------------------
-# 📅 CALENDAR SETTINGS
-# -------------------------------------------------
-st.sidebar.title("📅 Calendar Settings")
+PERSIST_KEYS = [
+    "workers",
+    "supervisors",
+    "supervisor_assignments",
+    "leave_days",
+    "off_days",
+    "workers_per_day",
+    "required_work_days",
+    "max_supervisors",
+    "admin_pin"
+]
 
-year = st.sidebar.number_input(
-    "Year", 2024, 2100, date.today().year
+# ---------------- SAFE LOAD ----------------
+def load_state():
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r") as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            os.remove(STATE_FILE)
+            return {}
+    return {}
+
+# ---------------- SAFE SAVE ----------------
+def save_state():
+    data = {k: st.session_state.get(k) for k in PERSIST_KEYS}
+    tmp = STATE_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, STATE_FILE)
+
+# ---------------- LOAD ----------------
+stored = load_state()
+for k, v in stored.items():
+    st.session_state.setdefault(k, v)
+
+# ---------------- DEFAULT STATE ----------------
+st.session_state.setdefault("workers_per_day", 10)
+st.session_state.setdefault("required_work_days", 18)
+st.session_state.setdefault("max_supervisors", 3)
+st.session_state.setdefault("admin_pin", "1234")
+st.session_state.setdefault("is_admin", False)
+st.session_state.setdefault("roster", None)
+
+st.session_state.setdefault("workers", [
+    "ONYEWUNYI","NDIMELE","BELLO","FASEYE","IWUNZE",
+    "OZUA","JAMES","OLABANJI","NURUDEEN","ENEH",
+    "MUSA","SANI","ADENIJI","JOSEPH","IDOWU"
+])
+
+st.session_state.setdefault("supervisors", [
+    "ONYEWUNYI","OLABANJI","SUPERVISOR C"
+])
+
+st.session_state.setdefault(
+    "supervisor_assignments",
+    {s: [] for s in st.session_state.supervisors}
 )
 
-month = st.sidebar.selectbox(
-    "Month",
-    list(range(1, 13)),
-    format_func=lambda x: calendar.month_name[x]
-)
+st.session_state.setdefault("leave_days", {})
+st.session_state.setdefault("off_days", {})
 
-days_in_month = calendar.monthrange(year, month)[1]
-days = list(range(1, days_in_month + 1))
+# ---------------- SIDEBAR ----------------
+st.sidebar.title("⚙️ Control Panel")
 
-# -------------------------------------------------
-# 👨🏽‍💼 SUPERVISOR MANAGER (ADMIN ONLY)
-# -------------------------------------------------
-if admin_unlocked:
+# ADMIN LOGIN
+with st.sidebar.expander("🔐 Admin Access", True):
 
-    st.sidebar.title("Supervisor Manager")
+    pin = st.text_input("Enter Admin PIN", type="password")
 
-    new_sup = st.sidebar.text_input(
-        "Add Supervisor"
-    )
+    if pin:
+        if pin == st.session_state.admin_pin:
+            st.session_state.is_admin = True
+            st.success("Admin access granted")
+        else:
+            st.session_state.is_admin = False
+            st.error("Invalid PIN")
 
-    if st.sidebar.button("Add Supervisor"):
-        if new_sup:
-            st.session_state.supervisors.append(
-                new_sup.upper()
-            )
+# ADMIN SETTINGS
+if st.session_state.is_admin:
 
-    remove_sup = st.sidebar.selectbox(
-        "Remove Supervisor",
-        [""] + st.session_state.supervisors
-    )
+    with st.sidebar.expander("🛠 Admin Settings", True):
 
-    if st.sidebar.button("Remove Supervisor"):
-        if remove_sup:
-            st.session_state.supervisors.remove(
-                remove_sup
-            )
-
-# -------------------------------------------------
-# 🧑🏽 WORKER OFF DAYS
-# -------------------------------------------------
-st.sidebar.title("Worker Days Off")
-
-for w in st.session_state.workers:
-
-    off = st.sidebar.multiselect(
-        f"{w} Off Days",
-        days,
-        key=f"off_{w}"
-    )
-
-    st.session_state.worker_off_days[w] = off
-
-# -------------------------------------------------
-# 👨🏽‍💼 SUPERVISOR OFF DAYS
-# -------------------------------------------------
-st.sidebar.title("Supervisor Days Off")
-
-for s in st.session_state.supervisors:
-
-    off = st.sidebar.multiselect(
-        f"{s} Off Days",
-        days,
-        key=f"sup_off_{s}"
-    )
-
-    st.session_state.supervisor_off_days[s] = off
-
-# -------------------------------------------------
-# ⚙️ GENERATE ROSTER
-# -------------------------------------------------
-if st.sidebar.button("Generate Roster"):
-
-    roster = pd.DataFrame(
-        index=(
-            st.session_state.supervisors +
-            st.session_state.workers
-        ),
-        columns=days
-    )
-
-    # Supervisors duty
-    for d in days:
-
-        available = [
-            s for s in st.session_state.supervisors
-            if d not in
-            st.session_state.supervisor_off_days.get(s, [])
-        ]
-
-        duty_sups = available[:2]
-
-        for s in st.session_state.supervisors:
-
-            if s in duty_sups:
-                roster.loc[s, d] = "SUP"
-            else:
-                roster.loc[s, d] = "OFF"
-
-    # Workers duty
-    shifts = ["M", "O"]
-
-    for i, w in enumerate(st.session_state.workers):
-
-        for d in days:
-
-            if d in \
-               st.session_state.worker_off_days.get(w, []):
-
-                roster.loc[w, d] = "OFF"
-
-            else:
-
-                roster.loc[w, d] = shifts[(i + d) % 2]
-
-    st.session_state.roster = roster
-
-# -------------------------------------------------
-# 📋 CALENDAR DISPLAY (GROUPED)
-# -------------------------------------------------
-st.title("Monthly Duty Roster")
-
-if not st.session_state.roster.empty:
-
-    cal = calendar.monthcalendar(year, month)
-
-    for week in cal:
-
-        cols = st.columns(7)
-
-        for i, day_num in enumerate(week):
-
-            if day_num == 0:
-                cols[i].write("")
-                continue
-
-            with cols[i]:
-
-                st.markdown(f"### {day_num}")
-
-                # Supervisors first
-                for sup in \
-                    st.session_state.supervisors:
-
-                    duty = \
-                        st.session_state.roster.loc[
-                            sup, day_num
-                        ]
-
-                    st.write(
-                        f"👨🏽‍💼 {sup} — {duty}"
-                    )
-
-                    # Workers under supervisor
-                    workers = \
-                        st.session_state.assignments.get(
-                            sup, []
-                        )
-
-                    for w in workers:
-
-                        duty = \
-                            st.session_state.roster.loc[
-                                w, day_num
-                            ]
-
-                        st.write(
-                            f"   ↳ 🧑🏽 {w} — {duty}"
-                        )
-
-# -------------------------------------------------
-# 📤 CSV EXPORT
-# -------------------------------------------------
-if not st.session_state.roster.empty:
-
-    csv = st.session_state.roster.to_csv()
-
-    st.download_button(
-        "Download CSV",
-        csv,
-        "roster.csv"
-    )
-
-# -------------------------------------------------
-# 🧾 PDF EXPORT (GROUPED)
-# -------------------------------------------------
-def generate_pdf():
-
-    file_path = "roster.pdf"
-
-    doc = SimpleDocTemplate(file_path)
-
-    styles = getSampleStyleSheet()
-    elements = []
-
-    elements.append(
-        Paragraph(
-            "Monthly Duty Roster",
-            styles["Title"]
+        st.session_state.workers_per_day = st.number_input(
+            "Workers per day", 1, 50,
+            st.session_state.workers_per_day
         )
-    )
 
-    elements.append(Spacer(1, 12))
+        st.session_state.required_work_days = st.number_input(
+            "Required work days", 1, 31,
+            st.session_state.required_work_days
+        )
 
-    data = [["Name"] + days]
+        new_worker = st.text_input("Add Worker")
 
-    for sup in st.session_state.supervisors:
+        if st.button("➕ Add Worker"):
+            if new_worker:
+                st.session_state.workers.append(
+                    new_worker.upper()
+                )
 
-        data.append([f"SUPERVISOR: {sup}"] + [""]*len(days))
+# SUPERVISORS
+if st.session_state.is_admin:
 
-        for w in \
-            st.session_state.assignments.get(sup, []):
+    with st.sidebar.expander("🧑‍✈️ Supervisors", True):
 
-            row = [w] + list(
-                st.session_state.roster.loc[w]
+        for i in range(st.session_state.max_supervisors):
+
+            sup = st.text_input(
+                f"Supervisor {i+1}",
+                st.session_state.supervisors[i]
+            ).upper()
+
+            old = st.session_state.supervisors[i]
+            st.session_state.supervisors[i] = sup
+
+            st.session_state.supervisor_assignments[sup] = \
+                st.session_state.supervisor_assignments.pop(old, [])
+
+            assigned = st.multiselect(
+                f"{sup} → Workers",
+                st.session_state.workers,
+                st.session_state.supervisor_assignments[sup]
             )
 
-            data.append(row)
+            st.session_state.supervisor_assignments[sup] = assigned
 
-    table = Table(data)
+# ACTIVE WORKERS
+active_workers = sorted({
+    w for workers in
+    st.session_state.supervisor_assignments.values()
+    for w in workers
+})
 
-    table.setStyle(TableStyle([
-        ("GRID", (0,0), (-1,-1), 1, colors.black),
-        ("BACKGROUND", (0,0), (-1,0), colors.grey),
-        ("SPAN", (0,1), (-1,1)),
-    ]))
+st.info(
+    f"✅ Active Workers: {', '.join(active_workers)}"
+    if active_workers else
+    "No workers assigned yet"
+)
 
-    elements.append(table)
-    doc.build(elements)
+# LEAVE / OFF
+with st.sidebar.expander("📆 Leave / OFF Days"):
 
-    return file_path
+    max_days = 31 - st.session_state.required_work_days
 
-if not st.session_state.roster.empty:
+    for w in active_workers:
 
-    if st.button("Export PDF"):
+        if st.session_state.is_admin:
 
-        pdf_path = generate_pdf()
+            leave = st.multiselect(
+                f"{w} – Leave",
+                DAYS,
+                st.session_state.leave_days.get(w, [])
+            )
 
-        with open(pdf_path, "rb") as f:
+            if len(leave) <= max_days:
+                st.session_state.leave_days[w] = leave
+
+        else:
+
+            blocked = set(
+                st.session_state.leave_days.get(w, [])
+            )
+
+            off = st.multiselect(
+                f"{w} – OFF",
+                [d for d in DAYS if d not in blocked],
+                st.session_state.off_days.get(w, [])
+            )
+
+            if len(off) <= max_days:
+                st.session_state.off_days[w] = off
+
+# ---------------- GENERATE ----------------
+st.divider()
+
+if st.button("🚀 Generate Roster", use_container_width=True):
+
+    if not active_workers:
+        st.error("No active workers assigned")
+
+    else:
+
+        roster = pd.DataFrame(
+            "O",
+            index=active_workers,
+            columns=DAYS
+        )
+
+        duty_count = {w: 0 for w in active_workers}
+
+        # Leave / Off
+        for w, offs in st.session_state.off_days.items():
+            for d in offs:
+                if w in roster.index:
+                    roster.loc[w, d] = "O"
+
+        for w, leaves in st.session_state.leave_days.items():
+            for d in leaves:
+                if w in roster.index:
+                    roster.loc[w, d] = "L"
+
+        # Duty Assignment
+        for d in DAYS:
+
+            available = [
+                w for w in active_workers
+                if roster.loc[w, d] == "O"
+                and duty_count[w]
+                < st.session_state.required_work_days
+            ]
+
+            available.sort(key=lambda x: duty_count[x])
+
+            for w in available[
+                :st.session_state.workers_per_day
+            ]:
+                roster.loc[w, d] = "M"
+                duty_count[w] += 1
+
+        st.session_state.roster = roster
+
+        st.success("Roster generated")
+
+# ---------------- GROUPED DISPLAY ----------------
+if st.session_state.roster is not None:
+
+    tab1, tab2, tab3 = st.tabs(
+        ["📋 Grouped Roster", "📊 Workload", "⬇️ Export"]
+    )
+
+    # ----- GROUP ROSTER -----
+    def build_grouped_roster():
+
+        roster = st.session_state.roster.copy()
+        grouped_rows = []
+
+        for sup, workers in \
+            st.session_state.supervisor_assignments.items():
+
+            sup_row = pd.DataFrame(
+                [["SUPERVISOR: " + sup] + [""]*len(DAYS)],
+                columns=["NAME"] + DAYS
+            )
+
+            grouped_rows.append(sup_row)
+
+            for w in workers:
+
+                if w in roster.index:
+
+                    row = roster.loc[w].to_frame().T
+                    row.insert(0, "NAME", "   ↳ " + w)
+
+                    grouped_rows.append(row)
+
+        return pd.concat(grouped_rows, ignore_index=True)
+
+    grouped_df = build_grouped_roster()
+
+    with tab1:
+        st.dataframe(grouped_df, use_container_width=True)
+
+    # WORKLOAD
+    with tab2:
+
+        counts = (
+            st.session_state.roster == "M"
+        ).sum(axis=1)
+
+        chart_df = pd.DataFrame(
+            counts,
+            columns=["Days Worked"]
+        )
+
+        st.bar_chart(chart_df)
+
+    # EXPORT
+    with tab3:
+
+        st.download_button(
+            "📥 Download CSV",
+            grouped_df.to_csv(index=False),
+            "roster.csv"
+        )
+
+        def export_pdf(df):
+
+            tmp = tempfile.NamedTemporaryFile(
+                delete=False,
+                suffix=".pdf"
+            )
+
+            doc = SimpleDocTemplate(
+                tmp.name,
+                pagesize=landscape(A4)
+            )
+
+            table = Table(
+                [df.columns.tolist()] +
+                df.values.tolist()
+            )
+
+            table.setStyle(TableStyle([
+                ("GRID",(0,0),(-1,-1),0.5,colors.black),
+                ("FONTSIZE",(0,0),(-1,-1),7)
+            ]))
+
+            doc.build([table])
+            return tmp.name
+
+        with open(export_pdf(grouped_df),"rb") as f:
 
             st.download_button(
-                "Download PDF",
+                "📄 Download PDF",
                 f,
                 "roster.pdf"
             )
+
+# ---------------- SAVE ----------------
+save_state()
