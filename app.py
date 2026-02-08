@@ -67,7 +67,7 @@ st.session_state.setdefault("supervisor_assignments", {})
 st.session_state.setdefault("leave_days", {})
 st.session_state.setdefault("off_days", {})
 
-# ensure supervisor list length matches max_supervisors
+# ensure supervisor list size
 while len(st.session_state.supervisors) < st.session_state.max_supervisors:
     st.session_state.supervisors.append(
         f"SUPERVISOR {len(st.session_state.supervisors)+1}"
@@ -131,16 +131,10 @@ if st.session_state.is_admin:
             current_workers = st.session_state.supervisor_assignments.get(old_sup, [])
 
             assigned = st.multiselect(
-                f"{sup} → Workers (Max 8)",
+                f"{sup} → Workers",
                 st.session_state.workers,
                 current_workers
             )
-
-            if len(assigned) > 8:
-                st.error("Maximum 8 workers allowed")
-                assigned = assigned[:8]
-
-            st.caption(f"{len(assigned)} / 8 workers")
 
             new_assignments[sup] = assigned
 
@@ -188,7 +182,6 @@ if st.button("🚀 Generate Roster", use_container_width=True):
 
 # ---------------- DISPLAY ----------------
 if st.session_state.roster is not None:
-
     st.dataframe(st.session_state.roster, use_container_width=True)
 
 save_state()
