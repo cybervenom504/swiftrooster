@@ -20,7 +20,6 @@ st.title("📅 SwiftRoster Pro – Airline Roster Generator")
 DAYS = list(range(1, 32))
 STATE_FILE = "roster_state.json"
 
-# Keys safe to persist
 PERSIST_KEYS = [
     "workers",
     "supervisors",
@@ -33,20 +32,32 @@ PERSIST_KEYS = [
     "admin_pin"
 ]
 
-# ---------------- STATE LOAD ----------------
+# ---------------- STATE LOAD (SAFE) ----------------
 def load_state():
     if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, "r") as f:
-            return json.load(f)
+        try:
+            with open(STATE_FILE, "r") as f:
+                return json.load(f)
+
+        # If file corrupted → reset it
+        except json.JSONDecodeError:
+            os.remove(STATE_FILE)
+            return {}
+
     return {}
 
-# ---------------- STATE SAVE ----------------
+# ---------------- STATE SAVE (ATOMIC) ----------------
 def save_state():
     data = {k: st.session_state.get(k) for k in PERSIST_KEYS}
-    with open(STATE_FILE, "w") as f:
+
+    temp_file = STATE_FILE + ".tmp"
+
+    with open(temp_file, "w") as f:
         json.dump(data, f, indent=2)
 
-# Load stored data
+    os.replace(temp_file, STATE_FILE)
+
+# ---------------- LOAD STORED ----------------
 stored = load_state()
 for k, v in stored.items():
     st.session_state.setdefault(k, v)
@@ -82,7 +93,9 @@ st.sidebar.title("⚙️ Control Panel")
 
 # ---- ADMIN LOGIN ----
 with st.sidebar.expander("🔐 Admin Access", expanded=True):
+
     pin = st.text_input("Enter Admin PIN", type="password")
+
     if pin:
         if pin == st.session_state.admin_pin:
             st.session_state.is_admin = True
@@ -93,6 +106,7 @@ with st.sidebar.expander("🔐 Admin Access", expanded=True):
 
 # ---- ADMIN SETTINGS ----
 if st.session_state.is_admin:
+
     with st.sidebar.expander("🛠 Admin Settings", expanded=True):
 
         st.session_state.workers_per_day = st.number_input(
@@ -109,10 +123,13 @@ if st.session_state.is_admin:
 
         if st.button("➕ Add Worker"):
             if new_worker:
-                st.session_state.workers.append(new_worker.upper())
+                st.session_state.workers.append(
+                    new_worker.upper()
+                )
 
 # ---- SUPERVISORS ----
 if st.session_state.is_admin:
+
     with st.sidebar.expander("🧑‍✈️ Supervisors", expanded=True):
 
         for i in range(st.session_state.max_supervisors):
@@ -145,7 +162,8 @@ active_workers = sorted({
 
 st.info(
     f"✅ Active Workers: {', '.join(active_workers)}"
-    if active_workers else "No workers assigned yet"
+    if active_workers else
+    "No workers assigned yet"
 )
 
 # ---------------- LEAVE / OFF DAYS ----------------
