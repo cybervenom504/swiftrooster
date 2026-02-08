@@ -10,8 +10,7 @@ from reportlab.lib import colors
 # ---------------- PAGE CONFIG ----------------
 st.set_page_config(
     page_title="SwiftRoster Pro",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
 st.title("📅 SwiftRoster Pro – Airline Roster Generator")
@@ -32,32 +31,26 @@ PERSIST_KEYS = [
     "admin_pin"
 ]
 
-# ---------------- STATE LOAD (SAFE) ----------------
+# ---------------- SAFE LOAD ----------------
 def load_state():
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, "r") as f:
                 return json.load(f)
-
-        # If file corrupted → reset it
         except json.JSONDecodeError:
             os.remove(STATE_FILE)
             return {}
-
     return {}
 
-# ---------------- STATE SAVE (ATOMIC) ----------------
+# ---------------- SAFE SAVE ----------------
 def save_state():
     data = {k: st.session_state.get(k) for k in PERSIST_KEYS}
-
-    temp_file = STATE_FILE + ".tmp"
-
-    with open(temp_file, "w") as f:
+    tmp = STATE_FILE + ".tmp"
+    with open(tmp, "w") as f:
         json.dump(data, f, indent=2)
+    os.replace(tmp, STATE_FILE)
 
-    os.replace(temp_file, STATE_FILE)
-
-# ---------------- LOAD STORED ----------------
+# ---------------- LOAD ----------------
 stored = load_state()
 for k, v in stored.items():
     st.session_state.setdefault(k, v)
@@ -66,23 +59,23 @@ for k, v in stored.items():
 st.session_state.setdefault("workers_per_day", 10)
 st.session_state.setdefault("required_work_days", 18)
 st.session_state.setdefault("max_supervisors", 3)
-st.session_state.setdefault("is_admin", False)
 st.session_state.setdefault("admin_pin", "1234")
+st.session_state.setdefault("is_admin", False)
 st.session_state.setdefault("roster", None)
 
 st.session_state.setdefault("workers", [
-    "ONYEWUNYI","NDIMELE","BELLO","FASEYE","IWUNZE","OZUA",
-    "JAMES","OLABANJI","NURUDEEN","ENEH","MUSA","SANI",
-    "ADENIJI","JOSEPH","IDOWU"
+    "ONYEWUNYI","NDIMELE","BELLO","FASEYE","IWUNZE",
+    "OZUA","JAMES","OLABANJI","NURUDEEN","ENEH",
+    "MUSA","SANI","ADENIJI","JOSEPH","IDOWU"
 ])
 
 st.session_state.setdefault("supervisors", [
-    "SUPERVISOR A","SUPERVISOR B","SUPERVISOR C"
+    "ONYEWUNYI","OLABANJI","SUPERVISOR C"
 ])
 
 st.session_state.setdefault(
     "supervisor_assignments",
-    {sup: [] for sup in st.session_state.supervisors}
+    {s: [] for s in st.session_state.supervisors}
 )
 
 st.session_state.setdefault("leave_days", {})
@@ -91,8 +84,8 @@ st.session_state.setdefault("off_days", {})
 # ---------------- SIDEBAR ----------------
 st.sidebar.title("⚙️ Control Panel")
 
-# ---- ADMIN LOGIN ----
-with st.sidebar.expander("🔐 Admin Access", expanded=True):
+# ADMIN LOGIN
+with st.sidebar.expander("🔐 Admin Access", True):
 
     pin = st.text_input("Enter Admin PIN", type="password")
 
@@ -104,10 +97,10 @@ with st.sidebar.expander("🔐 Admin Access", expanded=True):
             st.session_state.is_admin = False
             st.error("Invalid PIN")
 
-# ---- ADMIN SETTINGS ----
+# ADMIN SETTINGS
 if st.session_state.is_admin:
 
-    with st.sidebar.expander("🛠 Admin Settings", expanded=True):
+    with st.sidebar.expander("🛠 Admin Settings", True):
 
         st.session_state.workers_per_day = st.number_input(
             "Workers per day", 1, 50,
@@ -127,10 +120,10 @@ if st.session_state.is_admin:
                     new_worker.upper()
                 )
 
-# ---- SUPERVISORS ----
+# SUPERVISORS
 if st.session_state.is_admin:
 
-    with st.sidebar.expander("🧑‍✈️ Supervisors", expanded=True):
+    with st.sidebar.expander("🧑‍✈️ Supervisors", True):
 
         for i in range(st.session_state.max_supervisors):
 
@@ -153,7 +146,7 @@ if st.session_state.is_admin:
 
             st.session_state.supervisor_assignments[sup] = assigned
 
-# ---------------- ACTIVE WORKERS ----------------
+# ACTIVE WORKERS
 active_workers = sorted({
     w for workers in
     st.session_state.supervisor_assignments.values()
@@ -166,8 +159,8 @@ st.info(
     "No workers assigned yet"
 )
 
-# ---------------- LEAVE / OFF DAYS ----------------
-with st.sidebar.expander("📆 Leave / OFF Days", expanded=False):
+# LEAVE / OFF
+with st.sidebar.expander("📆 Leave / OFF Days"):
 
     max_days = 31 - st.session_state.required_work_days
 
@@ -199,14 +192,10 @@ with st.sidebar.expander("📆 Leave / OFF Days", expanded=False):
             if len(off) <= max_days:
                 st.session_state.off_days[w] = off
 
-# ---------------- GENERATE ROSTER ----------------
+# ---------------- GENERATE ----------------
 st.divider()
 
-if st.button(
-    "🚀 Generate Roster",
-    type="primary",
-    use_container_width=True
-):
+if st.button("🚀 Generate Roster", use_container_width=True):
 
     if not active_workers:
         st.error("No active workers assigned")
@@ -219,23 +208,20 @@ if st.button(
             columns=DAYS
         )
 
-        duty_count = {
-            w: 0 for w in active_workers
-        }
+        duty_count = {w: 0 for w in active_workers}
 
-        # Apply OFF
+        # Leave / Off
         for w, offs in st.session_state.off_days.items():
             for d in offs:
                 if w in roster.index:
                     roster.loc[w, d] = "O"
 
-        # Apply Leave
         for w, leaves in st.session_state.leave_days.items():
             for d in leaves:
                 if w in roster.index:
                     roster.loc[w, d] = "L"
 
-        # Assign Duties
+        # Duty Assignment
         for d in DAYS:
 
             available = [
@@ -245,9 +231,7 @@ if st.button(
                 < st.session_state.required_work_days
             ]
 
-            available.sort(
-                key=lambda x: duty_count[x]
-            )
+            available.sort(key=lambda x: duty_count[x])
 
             for w in available[
                 :st.session_state.workers_per_day
@@ -256,45 +240,71 @@ if st.button(
                 duty_count[w] += 1
 
         st.session_state.roster = roster
-        st.session_state.duty_count = duty_count
 
-        st.success("Roster generated successfully")
+        st.success("Roster generated")
 
-# ---------------- DISPLAY ----------------
+# ---------------- GROUPED DISPLAY ----------------
 if st.session_state.roster is not None:
 
     tab1, tab2, tab3 = st.tabs(
-        ["📋 Roster", "📊 Workload", "⬇️ Export"]
+        ["📋 Grouped Roster", "📊 Workload", "⬇️ Export"]
     )
 
-    with tab1:
-        st.dataframe(
-            st.session_state.roster.reset_index(),
-            use_container_width=True
-        )
+    # ----- GROUP ROSTER -----
+    def build_grouped_roster():
 
+        roster = st.session_state.roster.copy()
+        grouped_rows = []
+
+        for sup, workers in \
+            st.session_state.supervisor_assignments.items():
+
+            sup_row = pd.DataFrame(
+                [["SUPERVISOR: " + sup] + [""]*len(DAYS)],
+                columns=["NAME"] + DAYS
+            )
+
+            grouped_rows.append(sup_row)
+
+            for w in workers:
+
+                if w in roster.index:
+
+                    row = roster.loc[w].to_frame().T
+                    row.insert(0, "NAME", "   ↳ " + w)
+
+                    grouped_rows.append(row)
+
+        return pd.concat(grouped_rows, ignore_index=True)
+
+    grouped_df = build_grouped_roster()
+
+    with tab1:
+        st.dataframe(grouped_df, use_container_width=True)
+
+    # WORKLOAD
     with tab2:
 
-        chart_df = pd.DataFrame.from_dict(
-            st.session_state.duty_count,
-            orient="index",
+        counts = (
+            st.session_state.roster == "M"
+        ).sum(axis=1)
+
+        chart_df = pd.DataFrame(
+            counts,
             columns=["Days Worked"]
         )
 
         st.bar_chart(chart_df)
 
+    # EXPORT
     with tab3:
 
-        # CSV
         st.download_button(
             "📥 Download CSV",
-            st.session_state.roster
-            .reset_index()
-            .to_csv(index=False),
+            grouped_df.to_csv(index=False),
             "roster.csv"
         )
 
-        # PDF
         def export_pdf(df):
 
             tmp = tempfile.NamedTemporaryFile(
@@ -308,23 +318,19 @@ if st.session_state.roster is not None:
             )
 
             table = Table(
-                [["NAME"] + DAYS] +
-                df.reset_index().values.tolist()
+                [df.columns.tolist()] +
+                df.values.tolist()
             )
 
             table.setStyle(TableStyle([
-                ("GRID", (0,0), (-1,-1), 0.5, colors.black),
-                ("FONTSIZE", (0,0), (-1,-1), 7)
+                ("GRID",(0,0),(-1,-1),0.5,colors.black),
+                ("FONTSIZE",(0,0),(-1,-1),7)
             ]))
 
             doc.build([table])
-
             return tmp.name
 
-        with open(
-            export_pdf(st.session_state.roster),
-            "rb"
-        ) as f:
+        with open(export_pdf(grouped_df),"rb") as f:
 
             st.download_button(
                 "📄 Download PDF",
@@ -332,5 +338,5 @@ if st.session_state.roster is not None:
                 "roster.pdf"
             )
 
-# ---------------- SAVE STATE ----------------
+# ---------------- SAVE ----------------
 save_state()
